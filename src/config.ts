@@ -44,8 +44,7 @@ export const TERRAINS = [
   '九霄',
 ] as const;
 
-/** 地形的短英文名，用来查图集帧名与配色。 */
-export const TERRAIN_KEYS = [
+/** 地形的短英文名，用来查图集帧名与配色。 */export const TERRAIN_KEYS = [
   'graveyard',
   'ravine',
   'temple',
@@ -70,10 +69,27 @@ export const TERRAIN_COLOR: Record<string, string> = {
   nineHeavens: C.heaven,
 };
 
-/** 图集里地形砖按 1..9 编号，与 TERRAIN_KEYS 同序。 */
-export function groundFrame(terrainIndex: number): string {
-  return `spr_ground_${terrainIndex + 1}_0`;
+/** 图集里地形砖按 1..9 编号，与 TERRAIN_KEYS 同序；每处 4 个变体。 */
+export function groundFrame(terrainIndex: number): string[] {
+  return [0, 1, 2, 3].map((v) => `spr_ground_${terrainIndex + 1}_${v}`);
 }
+
+/**
+ * 每处地形撒什么场景件（对应 spr_prop_<名>_0）。
+ *
+ * 只放"读得懂、不挡路"的东西：树是树，坟是坟。
+ * 场景件负责让场地不像一块空地板，但不该比敌人抢眼。
+ */
+export const TERRAIN_PROPS: readonly (readonly string[])[] = [
+  ['deadTree', 'grave', 'grave', 'rock'], // 1 乱葬岗
+  ['rock', 'rock', 'deadTree'], // 2 断魂涧
+  ['lantern', 'lantern', 'rock'], // 3 枯骨庙
+  ['groundSword', 'rock'], // 4 万剑冢
+  ['rock'], // 5 镜心湖
+  ['brokenEdge', 'brokenEdge', 'plank'], // 6 悬空栈道  ['rock'], // 7 双生洞
+  ['rock'], // 8 雷池
+  [], // 9 九霄：天顶上什么都没有
+];
 
 /** 大境界突破的关卡（1 起）。 */
 export const MAJOR_BREAKTHROUGHS = new Set([3, 6, 9]);

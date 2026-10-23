@@ -56,8 +56,10 @@ for (const [fxKey, fn] of Object.entries(FX)) push(`spr_fx_${fxKey}_0`, fn(pal))
 /** 场景件。 */
 for (const [propKey, fn] of Object.entries(PROPS)) push(`spr_prop_${propKey}_0`, fn(pal));
 
-/** 九块地形砖。 */
-GROUND(pal).forEach((c, i) => push(`spr_ground_${i + 1}_0`, c));
+/** 九处地形，每处 4 个变体。 */
+GROUND(pal).forEach((variants, i) => {
+  variants.forEach((c, v) => push(`spr_ground_${i + 1}_${v}`, c));
+});
 
 /** UI。 */
 for (const [uiKey, c] of Object.entries(UI(pal))) push(`spr_ui_${uiKey}_0`, c);

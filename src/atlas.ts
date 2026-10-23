@@ -81,14 +81,58 @@ export function drawAt(
   g.drawImage(atlas.img, f.x, f.y, f.w, f.h, Math.round(x), Math.round(y), Math.round(f.w * scale), Math.round(f.h * scale));
 }
 
-/** 平铺一块地面砖填满屏幕。砖是 32×32，320×180 刚好 10×6 铺满。 */
-export function fillGround(g: CanvasRenderingContext2D, atlas: Atlas, frame: string, ox = 0, oy = 0): void {
-  const f = atlas.frame(frame);
-  for (let y = 0; y < HEIGHT; y += f.h) {
-    for (let x = 0; x < WIDTH; x += f.w) {
-      g.drawImage(atlas.img, f.x, f.y, f.w, f.h, x + ox, y + oy, f.w, f.h);
+/**
+ * 平铺地面砖填满屏幕。砖是 32×32，320×180 刚好 10×6 铺满。
+ *
+ * 每个地形有 4 个变体，按格子坐标轮换着铺 —— 只铺一块砖的话，
+ * 10×6 的重复会让人一眼看出"贴图"，画面立刻变廉价。
+ */
+export function fillGround(
+  g: CanvasRenderingContext2D,
+  atlas: Atlas,
+  frames: string | readonly string[],
+  ox = 0,
+  oy = 0,
+): void {
+  const list = typeof frames === 'string' ? [frames] : frames;
+  const first = atlas.frame(list[0]!);
+  const tw = first.w;
+  const th = first.h;
+  const cols = Math.ceil(WIDTH / tw) + 1;
+  const rows = Math.ceil(HEIGHT / th) + 1;
+
+  for (let ty = 0; ty < rows; ty += 1) {
+    for (let tx = 0; tx < cols; tx += 1) {
+      // 变体选择必须看起来是乱的。用乘加会让草簇排成斜向网格，
+      // 一眼就看出是贴图；这里用两个大质数异或。
+      const h = ((tx * 73856093) ^ (ty * 19349663)) >>> 0;
+      const pick = list[h % list.length]!;
+      const f = atlas.frame(pick);
+      g.drawImage(atlas.img, f.x, f.y, f.w, f.h, tx * tw + ox, ty * th + oy, tw, th);
     }
   }
+}
+
+/**
+ * 暗角：四周一圈压暗，把视线收到场地中间。
+ *
+ * 档数要多、每档要薄。上一版 4 档、每档 5 像素，墙一样齐的台阶
+ * 在深色地面上看起来像贴错了图。
+ */
+export function vignette(g: CanvasRenderingContext2D): void {
+  const bands = [0.16, 0.13, 0.11, 0.09, 0.07, 0.05, 0.03];
+  const step = 4;
+  g.save();
+  g.fillStyle = '#0b0b0f';
+  for (let i = 0; i < bands.length; i += 1) {
+    const inset = i * step;
+    g.globalAlpha = bands[i]!;
+    g.fillRect(0, inset, WIDTH, step);
+    g.fillRect(0, HEIGHT - inset - step, WIDTH, step);
+    g.fillRect(inset, 0, step, HEIGHT);
+    g.fillRect(WIDTH - inset - step, 0, step, HEIGHT);
+  }
+  g.restore();
 }
 
 /** 纯色覆盖一层，用于层色光晕与去饱和。 */

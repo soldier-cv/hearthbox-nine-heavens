@@ -300,63 +300,188 @@ function brokenEdge(pal) {
   return c;
 }
 
+/** 碎石：大部分地形都能撒。 */
+function rock(pal) {
+  const c = new Canvas(12, 8);
+  const top = pal.at('#6b6b88');
+  const low = pal.at('#454560');
+  c.rect(2, 3, 8, 4, low);
+  c.rect(3, 2, 6, 2, top);
+  c.rect(4, 1, 3, 1, top);
+  c.outline(pal);
+  return c;
+}
+
+/** 石灯：枯骨庙的点缀，也是唯一有暖光的东西。 */
+function lantern(pal) {
+  const c = new Canvas(8, 16);
+  const stone = pal.at('#454560');
+  const glow = pal.at('#f5a524');
+  c.rect(3, 6, 2, 9, stone); // 柱
+  c.rect(1, 14, 6, 2, stone); // 座
+  c.rect(1, 2, 6, 4, stone); // 灯箱
+  c.rect(2, 3, 4, 2, glow); // 火
+  c.rect(3, 0, 2, 2, stone); // 顶
+  c.outline(pal);
+  return c;
+}
+
 // ---------------------------------------------------------------- 地形砖
 
+/** 小随机数：同一块砖每次生成都一样，不同变体不同。 */
+function prng(seed) {
+  let s = seed >>> 0;
+  return () => {
+    s = (s * 1664525 + 1013904223) >>> 0;
+    return s / 4294967296;
+  };
+}
+
 /**
- * 九处地形各一块 32×32 地面砖。
- * 色板按 levels.md 的主色，纹理靠"同色降 alpha"，不引入新色相。
+ * 地面砖 32×32。
+ *
+ * 两条硬规矩：
+ * 1. **底色一律深色，地形主色只做点缀。**
+ *    上一版整块铺主色，结果九处地形全是一块刺眼的色板，
+ *    既抢角色的戏，又让满地的黑短横变成噪声。
+ * 2. **细节低对比、数量少。** 地面是背景，不该有比敌人更抢眼的东西。
+ *
+ * 每个地形出 4 个变体，铺的时候按格子坐标轮换，破掉平铺的重复感。
  */
-function groundTile(pal, hex, pattern) {
+function groundTile(pal, spec, variant) {
   const c = new Canvas(32, 32);
-  const base = pal.at(hex, 255);
-  const mid = pal.at(hex, 205);
-  const soft = pal.at(hex, 150);
-  const ink = pal.at('#14141c', 170);
+  const base = pal.at(spec.base);
+  const rnd = prng(0x51ed + variant * 7919 + spec.pattern.length * 131);
 
   c.rect(0, 0, 32, 32, base);
 
-  switch (pattern) {
-    case 'scatter': // 乱葬岗：斑驳
-      for (let i = 0; i < 26; i += 1) c.rect((i * 7) % 30, (i * 11) % 30, 2, 1, mid);
-      for (let i = 0; i < 8; i += 1) c.rect((i * 13) % 28, (i * 5) % 28, 3, 1, ink);
-      break;
-    case 'crack': // 断魂涧：岩缝
-      for (let i = 0; i < 4; i += 1) c.line(0, 4 + i * 8, 32, 8 + i * 8, ink);
-      for (let i = 0; i < 20; i += 1) c.rect((i * 5) % 30, (i * 9) % 30, 1, 1, soft);
-      break;
-    case 'ash': // 枯骨庙：暖灰烬
-      for (let i = 0; i < 30; i += 1) c.rect((i * 9) % 31, (i * 7) % 31, 1, 1, mid);
-      c.rect(0, 12, 32, 1, soft);
-      c.rect(0, 24, 32, 1, soft);
-      break;
-    case 'blades': // 万剑冢：铁屑
-      for (let i = 0; i < 10; i += 1) c.line(i * 3, 0, i * 3 + 6, 32, soft);
-      for (let i = 0; i < 14; i += 1) c.rect((i * 7) % 30, (i * 13) % 30, 2, 1, mid);
-      break;
-    case 'mirror': // 镜心湖：水面反光，横向
-      for (let y = 0; y < 32; y += 4) c.rect(0, y, 32, 1, soft);
-      for (let i = 0; i < 8; i += 1) c.rect((i * 4) % 28, (i * 6) % 28, 5, 1, pal.at('#d8d8e8', 120));
-      break;
-    case 'void': // 悬空栈道：紫蓝空
-      for (let i = 0; i < 18; i += 1) c.rect((i * 11) % 31, (i * 7) % 31, 1, 1, pal.at('#d8d8e8', 160));
-      c.rect(0, 0, 32, 1, mid);
-      break;
-    case 'white': // 双生洞：白，几乎无纹理
-      for (let i = 0; i < 6; i += 1) c.rect((i * 5) % 28, (i * 9) % 28, 3, 1, soft);
-      break;
-    case 'scorch': // 雷池：焦土裂纹
-      for (let i = 0; i < 6; i += 1) {
-        c.line(i * 6, 0, i * 6 + 8, 16, ink);
-        c.line(i * 6 + 8, 16, i * 6 + 2, 32, ink);
+  // 一层很轻的杂色。用同一色系的暗色，只求"不是一块死板"。
+  const speck = pal.at('#2c2c3e', 120);
+  for (let i = 0; i < 10; i += 1) {
+    c.set(Math.floor(rnd() * 32), Math.floor(rnd() * 32), speck);
+  }
+
+  // 随机摆一个 2~4 像素的小记号，离边 3 像素，避免铺起来出现明显接缝。
+  const at = (w, h) => [3 + Math.floor(rnd() * (32 - w - 6)), 3 + Math.floor(rnd() * (32 - h - 6))];
+  const accent = spec.accent;
+
+  switch (spec.pattern) {
+    case 'grass': {
+      // 乱葬岗：几撮枯草 + 一块碎石。
+      // 数量必须随机 —— 每块砖都长三撮草，铺起来就是一张规则的壁纸。
+      const tufts = Math.floor(rnd() * 4);
+      for (let i = 0; i < tufts; i += 1) {
+        const [x, y] = at(3, 3);
+        const g = pal.at(accent, 150);
+        const tall = rnd() < 0.35;
+        if (tall) {
+          c.set(x + 1, y, g);
+          c.set(x + 1, y + 1, g);
+          c.set(x, y + 2, pal.at(accent, 110));
+          c.set(x + 2, y + 2, pal.at(accent, 110));
+        } else {
+          c.set(x, y + 1, g);
+          c.set(x + 1, y + 2, g);
+          c.set(x + 2, y + 1, g);
+        }
       }
-      for (let i = 0; i < 10; i += 1) c.rect((i * 11) % 30, (i * 5) % 30, 1, 1, mid);
+      if (rnd() < 0.6) {
+        const [sx, sy] = at(4, 3);
+        c.rect(sx, sy, 3, 2, pal.at('#454560', 210));
+      }
       break;
-    case 'cloud': // 九霄：云，软块
-      for (let i = 0; i < 12; i += 1) c.ellipse((i * 7) % 32, (i * 11) % 32, 4, 2, soft);
+    }
+    case 'crack': {
+      // 断魂涧：岩缝 + 几粒碎石。
+      // 方向必须随机，全朝同一个斜角会连成一张"织纹"，像块布。
+      const seams = 1 + Math.floor(rnd() * 2);
+      for (let i = 0; i < seams; i += 1) {
+        const [x, y] = at(9, 7);
+        const dir = rnd() < 0.5 ? 1 : -1;
+        const len = 3 + Math.floor(rnd() * 4);
+        c.line(x, y, x + len, y + dir * 2, pal.at(accent, 170));
+        if (rnd() < 0.5) c.line(x + len, y + dir * 2, x + len + 2, y + dir * 4, pal.at(accent, 120));
+      }
+      const pebbles = Math.floor(rnd() * 4);
+      for (let i = 0; i < pebbles; i += 1) {
+        const [x, y] = at(2, 2);
+        c.set(x, y, pal.at('#6b6b88', 190));
+      }
       break;
+    }
+    case 'ash': {
+      // 枯骨庙：香灰压出的浅痕 + 一点没灭的火星。
+      const n = 1 + Math.floor(rnd() * 2);
+      for (let i = 0; i < n; i += 1) {
+        const [x, y] = at(7, 2);
+        c.rect(x, y, 6, 1, pal.at(accent, 70));
+      }
+      if (rnd() < 0.5) {
+        const [ex, ey] = at(1, 1);
+        c.set(ex, ey, pal.at(accent, 210));
+      }
+      break;
+    }
+    case 'blade': {
+      // 万剑冢：地上被剑划出的短痕。数量同样随机。
+      const n = Math.floor(rnd() * 4);
+      for (let i = 0; i < n; i += 1) {
+        const [x, y] = at(5, 4);
+        c.line(x, y, x + 3, y - 2, pal.at(accent, 150));
+      }
+      break;
+    }
+    case 'water': {
+      // 镜心湖：横向反光。只做横向，竖向会显得像雪。
+      for (let i = 0; i < 3; i += 1) {
+        const [x, y] = at(8, 1);
+        c.rect(x, y, 5 + Math.floor(rnd() * 3), 1, pal.at(accent, 90));
+      }
+      const [bx, by] = at(4, 1);
+      c.rect(bx, by, 3, 1, pal.at(accent, 190));
+      break;
+    }
+    case 'void': {
+      // 悬空栈道：脚底下是空的，只有远处的星。
+      for (let i = 0; i < 4; i += 1) {
+        const [x, y] = at(1, 1);
+        c.set(x, y, pal.at(accent, 200));
+      }
+      const [bx, by] = at(1, 1);
+      c.set(bx, by, pal.at('#d8d8e8', 140));
+      break;
+    }
+    case 'frost': {
+      // 双生洞：石面上的白霜。
+      for (let i = 0; i < 4; i += 1) {
+        const [x, y] = at(1, 1);
+        c.set(x, y, pal.at(accent, 130));
+      }
+      const [lx, ly] = at(6, 3);
+      c.line(lx, ly, lx + 4, ly + 2, pal.at(accent, 90));
+      break;
+    }
+    case 'scorch': {
+      // 雷池：被劈过的焦土纹。
+      for (let i = 0; i < 2; i += 1) {
+        const [x, y] = at(6, 6);
+        c.line(x, y, x + 2, y + 3, pal.at(accent, 160));
+        c.line(x + 2, y + 3, x + 1, y + 5, pal.at(accent, 110));
+      }
+      break;
+    }
+    case 'cloud': {
+      // 九霄：脚边流的云。
+      for (let i = 0; i < 3; i += 1) {
+        const [x, y] = at(6, 3);
+        c.ellipse(x + 3, y + 1, 3, 1, pal.at(accent, 100));
+      }
+      break;
+    }
     default:
       break;
   }
+
   return c;
 }
 
@@ -461,20 +586,28 @@ export const PROPS = {
   deadTree: (pal) => deadTree(pal),
   plank: (pal) => plank(pal),
   brokenEdge: (pal) => brokenEdge(pal),
+  rock: (pal) => rock(pal),
+  lantern: (pal) => lantern(pal),
 };
 
-/** 九块地形砖，顺序与 levels.md / config 的 LEVEL_TERRAIN 一致。 */
-export const GROUND = (pal) => [
-  groundTile(pal, '#4ade80', 'scatter'), // 1 乱葬岗
-  groundTile(pal, '#6b6b88', 'crack'), // 2 断魂涧
-  groundTile(pal, '#f5a524', 'ash'), // 3 枯骨庙
-  groundTile(pal, '#9a9ab0', 'blades'), // 4 万剑冢
-  groundTile(pal, '#d8d8e8', 'mirror'), // 5 镜心湖
-  groundTile(pal, '#818cf8', 'void'), // 6 悬空栈道
-  groundTile(pal, '#d8d8e8', 'white'), // 7 双生洞
-  groundTile(pal, '#60a5fa', 'scorch'), // 8 雷池
-  groundTile(pal, '#c084fc', 'cloud'), // 9 九霄
-];
+/**
+ * 九处地形，每处 4 个变体，顺序与 levels.md / config 的 TERRAIN_KEYS 一致。
+ * 底色一律深色，主色只做点缀 —— 理由见 groundTile 的注释。
+ */
+export const GROUND = (pal) => {
+  const specs = [
+    { base: '#1e1e2a', accent: '#4ade80', pattern: 'grass' }, // 1 乱葬岗
+    { base: '#2c2c3e', accent: '#454560', pattern: 'crack' }, // 2 断魂涧
+    { base: '#1e1e2a', accent: '#f5a524', pattern: 'ash' }, // 3 枯骨庙
+    { base: '#2c2c3e', accent: '#9a9ab0', pattern: 'blade' }, // 4 万剑冢
+    { base: '#454560', accent: '#2dd4bf', pattern: 'water' }, // 5 镜心湖
+    { base: '#14141c', accent: '#818cf8', pattern: 'void' }, // 6 悬空栈道
+    { base: '#6b6b88', accent: '#d8d8e8', pattern: 'frost' }, // 7 双生洞
+    { base: '#1e1e2a', accent: '#60a5fa', pattern: 'scorch' }, // 8 雷池
+    { base: '#14141c', accent: '#c084fc', pattern: 'cloud' }, // 9 九霄
+  ];
+  return specs.map((spec) => [0, 1, 2, 3].map((v) => groundTile(pal, spec, v)));
+};
 
 export const UI = (pal) => {
   const bars = barParts(pal);

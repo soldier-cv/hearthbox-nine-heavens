@@ -160,9 +160,11 @@ function ensureWarlord(s: ShapeState, c: Ctx): Enemy | null {
   const peaceful = s.plan.warlordPeaceful === true;
 
   // 打不动 / 不还手：改实例字段，**不改共享 def**（否则下一个角色的同一只怪也被改了）。
+  // 生成点要离出生点(正中)足够远。贴脸生成的话，Boss 一次接触伤害就抵半管血，
+  // 玩家还没看清是什么就已经死了。
   const first = spawnEnemy(c, key, {
     x: WIDTH * 0.5,
-    y: HEIGHT * 0.26,
+    y: HEIGHT * 0.14,
     skillOn: !peaceful,
   });
   c.enemies.push(first);
@@ -173,7 +175,9 @@ function ensureWarlord(s: ShapeState, c: Ctx): Enemy | null {
     const poolHp = Math.round((getMaxHp(first) / 2) / 100) * 100;
     first.hpPool = { hp: poolHp * 2, max: poolHp * 2 };
     setHp(first, poolHp * 2);
-    const second = spawnEnemy(c, key, { x: WIDTH * 0.62, y: HEIGHT * 0.38, skillOn: !peaceful });
+    // 两个人分左右站，别都堆在正中。
+    first.x = WIDTH * 0.32;
+    const second = spawnEnemy(c, key, { x: WIDTH * 0.68, y: HEIGHT * 0.3, skillOn: !peaceful });
     second.hpPool = first.hpPool;
     setHp(second, poolHp * 2);
     c.enemies.push(second);
@@ -359,7 +363,18 @@ const shapeRun: Shape = {
   kind: 'RUN',
   begin(s, c) {
     c.exit = { x: WIDTH - 24, y: HEIGHT / 2 };
-    ensureWarlord(s, c);
+    const target = ensureWarlord(s, c);
+    // 限时救援：他在栈道尽头，等你跑到面前。
+    // 不能让他照常"追玩家" —— 那样两个人会自己走到一起，
+    // 一进关就判"救到了"，这一关的戏整个没了。
+    if (target && s.plan.rescue) {
+      target.x = WIDTH - 44;
+      target.y = HEIGHT / 2;
+      target.purpose = 'hold';
+      target.speed = 0;
+      target.killable = false;
+      target.skillOn = false;
+    }
   },
   step(s, c, dt) {
     s.t += dt;

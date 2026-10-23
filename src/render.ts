@@ -6,7 +6,7 @@
  */
 
 import type { Atlas } from './atlas';
-import { bar, drawAt, drawCentered, fillGround, groupNumber, shortNumber, text, wash } from './atlas';
+import { bar, drawAt, drawCentered, fillGround, groupNumber, shortNumber, text, vignette, wash } from './atlas';
 import { C, HEIGHT, REALMS, TERRAIN_COLOR, TERRAINS, WIDTH, groundFrame } from './config';
 import type { Enemy } from './entities';
 import { getHp, getMaxHp, tierColor } from './entities';
@@ -39,6 +39,8 @@ export interface View {
   enemies: Enemy[];
   plan: LevelPlan | null;
   shape: ShapeState | null;
+  /** 本关的场景件。画在地面之上、实体之下。 */
+  props: { frame: string; x: number; y: number }[];
   /** 三选一 / 分支的候选。 */
   offers: Offer[];
   /** 菜单光标。 */
@@ -199,6 +201,11 @@ function paintWorld(v: View): void {
   fillGround(g, v.atlas, groundFrame(plan ? plan.terrain : 0));
   if (plan) wash(g, TERRAIN_COLOR[TERRAINS[plan.terrain] ?? ''] ?? C.wood, 0.08);
 
+  // 场景件：树、坟、石灯。画在形状自己的场地之前，木牌才压得住它们。
+  for (const prop of v.props) {
+    if (v.atlas.has(prop.frame)) drawCentered(g, v.atlas, prop.frame, prop.x, prop.y);
+  }
+
   // 形状自己的场地（木牌、香炉、坟）。用真实战斗上下文，
   // 否则 begin 里算出来的守护物位置和血量会丢。
   if (v.shape && v.combat) {
@@ -206,6 +213,9 @@ function paintWorld(v: View): void {
   }
 
   paintWorldObjects(v);
+
+  // 暗角：把视线收到场地中间。画在实体之后、HUD 之前，不压 UI。
+  vignette(g);
 
   // 选卡和过场是全屏界面，角色、血条、技能槽都不画，避免透出来。
   const overlay = v.phase === 'cutscene' || v.phase === 'starter' || v.phase === 'choosing'

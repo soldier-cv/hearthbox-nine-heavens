@@ -22,7 +22,7 @@ import {
 import { CHARACTERS, CHAR_ORDER, isUnlocked } from './characters';
 import type { Ctx } from './combat';
 import { cast, resolveTelegraph, spawnEnemy, updateBolts, updateEnemies, updateFields } from './combat';
-import { C, HEIGHT, PLAYER, WIDTH } from './config';
+import { C, HEIGHT, PLAYER, TERRAIN_PROPS, WIDTH } from './config';
 import type { Enemy } from './entities';
 import { getHp, getMaxHp } from './entities';
 import { keywordSum } from './keywords';
@@ -88,6 +88,10 @@ export default defineGame({
     let tainted = false;
     /** 三选一结束后回到哪个阶段。平时回 playing，过关那一刻触发则回 cleared。 */
     let afterChoice: 'playing' | 'cleared' | 'won' = 'playing';
+    /** 本关的场景件（树、坟、石灯）。按关卡定死，不会每帧乱跳。 */
+    let props: { frame: string; x: number; y: number }[] = [];
+    /** 验收截图用的不死。只在 ?debug=1 时能被打开。 */
+    let debugInvincible = false;
     /**
      * 本次按键是否已经被菜单消费。
      * 不加这个，按 J 跳过过场的同一帧里 update() 会再读到 J，
@@ -133,6 +137,7 @@ export default defineGame({
     /** 玩家掉血。无敌帧和格挡都在这里，不散落到各处。 */
     function hurtPlayer(amount: number): void {
       if (player.invuln > 0) return;
+      if (debugInvincible) return;
       if (tune.immortal()) {
         tainted = true;
         player.invuln = 0.4;
@@ -222,6 +227,35 @@ export default defineGame({
       if (pickedStarters.length >= 2) startLevel(startLevelFor(saves.char(char)));
     }
 
+    /**
+     * 撒场景件。按关卡 seed 算，同一个关卡每次进去位置一致。
+     * 只撒在离中心 70 像素以外，避开出生点和木牌，免得挡视线。
+     */
+    function makeProps(terrainIndex: number, level: number, key: CharKey): { frame: string; x: number; y: number }[] {
+      const kinds = TERRAIN_PROPS[terrainIndex] ?? [];
+      if (!kinds.length) return [];
+
+      let seed = (0x9e37 ^ (level * 7919) ^ (key.length * 131)) >>> 0;
+      const rnd = () => {
+        seed = (seed * 1664525 + 1013904223) >>> 0;
+        return seed / 4294967296;
+      };
+
+      const out: { frame: string; x: number; y: number }[] = [];
+      for (let i = 0; i < 9; i += 1) {
+        const x = 16 + rnd() * (WIDTH - 32);
+        const y = 20 + rnd() * (HEIGHT - 40);
+        // 出生点周围留空，别一开局就站在树里。
+        if (Math.hypot(x - WIDTH / 2, y - HEIGHT / 2) < 58) continue;
+        // 出口（RUN 关）和木牌（HOLD 关）前面不放东西。
+        if (Math.hypot(x - (WIDTH - 24), y - HEIGHT / 2) < 34) continue;
+        if (Math.hypot(x - WIDTH / 2, y - HEIGHT * 0.44) < 30) continue;
+        const kind = kinds[Math.floor(rnd() * kinds.length)]!;
+        out.push({ frame: `spr_prop_${kind}_0`, x, y });
+      }
+      return out;
+    }
+
     function startLevel(n: number): void {
       plan = planFor(char, n - 1);
       shape = makeState(plan);
@@ -230,6 +264,7 @@ export default defineGame({
       player.x = WIDTH / 2;
       player.y = HEIGHT / 2;
       cutText = plan.cut;
+      props = makeProps(plan.terrain, n, char);
       run.enter(n, derived.level);
 
       if (tune.soundOn()) audio.setDrone(droneHz(n - 1), n);
@@ -580,6 +615,7 @@ export default defineGame({
         enemies,
         plan,
         shape,
+        props,
         offers,
         cursor,
         pickedStarters,
@@ -634,9 +670,14 @@ export default defineGame({
     }
 
     if (debugHook) {
+      // 验收截图用：只关掉玩家的受伤。正常游玩时这段不执行。
+      debugHook.__nineHeavensInvincible = (on: boolean) => {
+        debugInvincible = on === true;
+      };
+
       // 验收用的跳关钩子：逐个形状截图，不必真打 27 关。
       // 只在 ?debug=1 时存在，正常游玩时这段不执行。
-      debugHook.__nineHeavensJump = (level: number, key: CharKey = char) => {
+      debugHook.__nineHeavensJump = (level: number, key: CharKey = char, skipCutscene = true) => {
         char = key;
         const save = saves.char(key);
         derived = deriveFromSave(save);
@@ -648,6 +689,7 @@ export default defineGame({
         }));
         player.picks = 0;
         startLevel(level);
+        if (skipCutscene && run.phase === 'cutscene') enterLevel();
         return `${key} L${level} ${plan.shape}`;
       };
     }
