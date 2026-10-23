@@ -20,7 +20,9 @@
 
 export type Phase =
   | 'select'
+  | 'roll'
   | 'meta'
+  | 'points'
   | 'starter'
   | 'cutscene'
   | 'playing'

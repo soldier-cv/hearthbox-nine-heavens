@@ -15,7 +15,9 @@ import {
   MANA,
   MAX_FUSION_LEVEL,
   MAX_SKILL_LEVEL,
+  NEUTRAL_APT,
   SWORD_INTENT,
+  aptBase,
   cooldownOf,
   levelFromXiu,
   playerHit,
@@ -62,6 +64,8 @@ export interface PlayerState {
   maxHp: number;
   /** 道人的灵力。 */
   mana: number;
+  /** 灵力上限（灵机与加点共同决定）。渲染和回复都读它，不要另算。 */
+  resMax: number;
   /** 魔头的魔气。 */
   demon: number;
   /** 入魔剩余秒数。 */
@@ -103,6 +107,8 @@ export interface PlayerState {
 export interface Derived {
   level: number;
   baseMaxHp: number;
+  /** 灵力 / 魔气上限的倍率（来自灵机）。 */
+  resourceMul: number;
   cooldownCut: number;
   speedBonus: number;
   crit: number;
@@ -118,14 +124,19 @@ export function outerLevelOf(save: CharSave): number {
 export function deriveFromSave(save: CharSave): Derived {
   const level = outerLevelOf(save);
   const p = save.points;
+  // 天资决定一级的底子；等级倍率只乘在底子上；加点最后加，不参与乘法。
+  // 三条线分开，改一条不会把另外两条带歪。
+  const base = aptBase(save.apt ?? NEUTRAL_APT);
+  const levelFactor = 1 + 0.04 * (level - 1);
   return {
     level,
-    baseMaxHp: Math.round((20000 * (1 + 0.04 * (level - 1))) / 100) * 100 + statValue('hp', p.hp),
-    cooldownCut: statValue('cooldown', p.cooldown),
-    speedBonus: statValue('speed', p.speed),
-    crit: 0.08 + statValue('crit', p.crit),
-    killHeal: 0.003 + statValue('killHeal', p.killHeal),
-    damageBonus: statValue('damage', p.damage),
+    baseMaxHp: Math.round((base.maxHp * levelFactor) / 100) * 100 + statValue('hp', p.hp),
+    resourceMul: base.resourceMul,
+    cooldownCut: base.cooldownCut + statValue('cooldown', p.cooldown),
+    speedBonus: base.speedBonus + statValue('speed', p.speed),
+    crit: 0.08 + base.critDelta + statValue('crit', p.crit),
+    killHeal: 0.003 + base.killHealDelta + statValue('killHeal', p.killHeal),
+    damageBonus: base.damageBonus + statValue('damage', p.damage),
   };
 }
 
@@ -136,6 +147,7 @@ export function makePlayer(ctx: GameContext, derived: Derived): PlayerState {
     hp: derived.baseMaxHp,
     maxHp: derived.baseMaxHp,
     mana: MANA.startPool,
+    resMax: MANA.max,
     demon: 0,
     burst: 0,
     sinceHit: 0,
@@ -272,14 +284,24 @@ export function onDealtHit(p: PlayerState, def: CharDef): void {
   }
 }
 
-/** 灵力/魔气的加点上限扩展。 */
-export function resourceMax(def: CharDef, extraPoints: number): number {
-  if (def.key === 'daoist') return MANA.max + statValue('resource', extraPoints);
+/** 灵力/魔气的加点上限扩展。灵机决定基础倍率，加点在其上再加。 */
+export function resourceMax(def: CharDef, extraPoints: number, resourceMul = 1): number {
+  if (def.key === 'daoist') return Math.round((MANA.max + statValue('resource', extraPoints)) * resourceMul);
   return DEMONA.max;
 }
 
 /** 每帧推进：冷却、资源回复、入魔、各种剩余时间。 */
-export function tickPlayer(p: PlayerState, def: CharDef, tune: Tuning, dt: number, extraResource: number): void {
+export function tickPlayer(
+  p: PlayerState,
+  def: CharDef,
+  tune: Tuning,
+  dt: number,
+  extraResource: number,
+  resourceMul = 1,
+): void {
+  // 上限每帧都重算：加点、灵机、临时增益都走这一条，别在多处各算一遍。
+  p.resMax = resourceMax(def, extraResource, resourceMul);
+
   for (const slot of p.slots) {
     if (slot.cd > 0) slot.cd = Math.max(0, slot.cd - dt);
   }
@@ -295,7 +317,7 @@ export function tickPlayer(p: PlayerState, def: CharDef, tune: Tuning, dt: numbe
   p.sinceHit += dt;
 
   if (def.key === 'daoist') {
-    p.mana = Math.min(resourceMax(def, extraResource), p.mana + MANA.regen * dt);
+    p.mana = Math.min(p.resMax, p.mana + MANA.regen * dt);
   }
 
   if (def.key === 'demon') {
@@ -320,7 +342,7 @@ export function tickPlayer(p: PlayerState, def: CharDef, tune: Tuning, dt: numbe
 /** 过关回满。 */
 export function refill(p: PlayerState, def: CharDef, extraResource: number): void {
   p.hp = p.maxHp;
-  if (def.key === 'daoist') p.mana = resourceMax(def, extraResource);
+  if (def.key === 'daoist') p.mana = p.resMax;
   p.invuln = 0;
   p.burst = 0;
   p.demon = 0;

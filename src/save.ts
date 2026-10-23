@@ -12,15 +12,18 @@
 
 import type { CharKey } from './skills';
 import { CHAR_ORDER } from './characters';
-import { MAX_OUTER_LEVEL, levelFromXiu } from './balance';
+import type { Apt } from './balance';
+import { MAX_OUTER_LEVEL, NEUTRAL_APT, levelFromXiu } from './balance';
 
-const SAVE_VERSION = 1;
+const SAVE_VERSION = 2;
 
 /** 关外进度。 */
 export interface CharSave {
   v: number;
   /** 累计修为（不是等级，等级由它算出，改曲线不会让老档作废）。 */
   xiu: number;
+  /** 开局掷的天资。null = 新角色，还没掷。 */
+  apt: Apt | null;
   /** 加点分配。 */
   points: {
     hp: number;
@@ -60,6 +63,7 @@ export function emptyCharSave(): CharSave {
   return {
     v: SAVE_VERSION,
     xiu: 0,
+    apt: null,
     points: { hp: 0, resource: 0, speed: 0, damage: 0, cooldown: 0, crit: 0, killHeal: 0 },
     cleared: [false, false, false, false, false, false, false, false, false],
     bloodDebt: [],
@@ -87,9 +91,14 @@ export class Saves {
     const base = fill();
     if (!raw || typeof raw !== 'object') return base;
     const obj = raw as Record<string, unknown>;
-    if (obj.v !== SAVE_VERSION) return base;
-    // 浅合并：字段缺失用默认值补，多出来的字段忽略。
-    const out = { ...base, ...obj } as T;
+    // 只认当前版本和上一版；更老的直接清掉。
+    if (obj.v !== SAVE_VERSION && obj.v !== SAVE_VERSION - 1) return base;
+    const out = { ...base, ...obj, v: SAVE_VERSION } as T;
+    // v1 -> v2：老档没有天资。给中性天资，不让老玩家被迫重掷。
+    if (obj.v === 1) {
+      const rec = out as unknown as CharSave;
+      if (!rec.apt) rec.apt = { ...NEUTRAL_APT };
+    }
     return out;
   }
 

@@ -158,6 +158,115 @@ export function levelFromXiu(total: number): { level: number; into: number; need
 
 export const POINTS_PER_LEVEL = 3;
 
+// ---------------------------------------------------------------- 开局天资
+
+/**
+ * 四项天资。总和固定 1,000，单项 150~350。
+ *
+ * 总和固定是关键：掷的是"偏科"，不是"欧非"。
+ * 如果总和也随机，运气差的人整局都弱，那是赌博不是 build。
+ */
+export type AptKey = 'body' | 'spirit' | 'agility' | 'power';
+export const APT_ORDER: readonly AptKey[] = ['body', 'spirit', 'agility', 'power'];
+export const APT_TOTAL = 1000;
+export const APT_MIN = 150;
+export const APT_MAX = 350;
+/** 基准线：四项都是 250 时，正好等于一级的现有数值。 */
+export const APT_AVG = APT_TOTAL / APT_ORDER.length;
+/** 掷骰机会。第一次自动，之后可重掷 ROLL_CHANCES - 1 次。 */
+export const ROLL_CHANCES = 3;
+/** 体魄 → 气血。250 × 80 = 20,000。 */
+export const HP_PER_BODY = 80;
+
+export interface Apt {
+  body: number;
+  spirit: number;
+  agility: number;
+  power: number;
+}
+
+/** 中性天资：迁移老档时用，等于"没掷过但也不吃亏"。 */
+export const NEUTRAL_APT: Apt = { body: 250, spirit: 250, agility: 250, power: 250 };
+
+export const APT_NAMES: Record<AptKey, { name: string; blurb: string }> = {
+  body: { name: '体魄', blurb: '气血与击杀回血' },
+  spirit: { name: '灵机', blurb: '灵力上限与冷却' },
+  agility: { name: '身法', blurb: '移动速度' },
+  power: { name: '杀伐', blurb: '伤害与暴击' },
+};
+
+const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+
+/**
+ * 掷一次天资。
+ *
+ * 先四项独立随机，再按比例压到总和 1,000。压完会碰到 150/350 的边界，
+ * 所以再迭代几次把差额匀给还没顶到边界的项。
+ * 最后补舍入误差，保证加起来**正好** 1,000 —— 差一分玩家都会发现。
+ */
+export function rollApt(rand01: () => number): Apt {
+  const raw = APT_ORDER.map(() => APT_MIN + rand01() * (APT_MAX - APT_MIN));
+  const sum = raw.reduce((a, b) => a + b, 0) || 1;
+  const vals = raw.map((v) => (v / sum) * APT_TOTAL);
+
+  for (let iter = 0; iter < 24; iter += 1) {
+    for (let i = 0; i < vals.length; i += 1) vals[i] = clamp(vals[i]!, APT_MIN, APT_MAX);
+    const diff = APT_TOTAL - vals.reduce((a, b) => a + b, 0);
+    if (Math.abs(diff) < 0.01) break;
+    const free = vals
+      .map((v, i) => ({ v, i }))
+      .filter(({ v }) => (diff > 0 ? v < APT_MAX : v > APT_MIN));
+    if (!free.length) break;
+    const share = diff / free.length;
+    for (const f of free) vals[f.i] = clamp(f.v + share, APT_MIN, APT_MAX);
+  }
+
+  const out = vals.map((v) => Math.round(v));
+  let drift = APT_TOTAL - out.reduce((a, b) => a + b, 0);
+  // 补舍入误差时必须看边界：直接加在最大项上会把它顶过 350。
+  // 优先补给最大的项，但只补给还有余量、或还能往下让的项。
+  while (drift !== 0) {
+    let idx = -1;
+    for (let i = 0; i < out.length; i += 1) {
+      const can = drift > 0 ? out[i]! < APT_MAX : out[i]! > APT_MIN;
+      if (!can) continue;
+      if (idx < 0 || (drift > 0 ? out[i]! > out[idx]! : out[i]! < out[idx]!)) idx = i;
+    }
+    if (idx < 0) break;
+    out[idx] = out[idx]! + (drift > 0 ? 1 : -1);
+    drift += drift > 0 ? -1 : 1;
+  }
+
+  return { body: out[0]!, spirit: out[1]!, agility: out[2]!, power: out[3]! };
+}
+
+/** 天资离基准线多远（1.0 = 250）。 */
+export function aptRatio(v: number): number {
+  return v / APT_AVG;
+}
+
+/**
+ * 天资换算成一级的基础值。
+ * 气血用乘法（唯一看绝对数值的属性），其余用偏移量（它们本来就是百分比）。
+ */
+export function aptBase(apt: Apt) {
+  const r = {
+    body: aptRatio(apt.body),
+    spirit: aptRatio(apt.spirit),
+    agility: aptRatio(apt.agility),
+    power: aptRatio(apt.power),
+  };
+  return {
+    maxHp: Math.round(apt.body * HP_PER_BODY),
+    resourceMul: r.spirit,
+    cooldownCut: (r.spirit - 1) * 0.15,
+    speedBonus: (r.agility - 1) * 0.15,
+    damageBonus: (r.power - 1) * 0.2,
+    critDelta: (r.power - 1) * 0.1,
+    killHealDelta: (r.body - 1) * 0.01,
+  };
+}
+
 export type StatKey = 'hp' | 'resource' | 'speed' | 'damage' | 'cooldown' | 'crit' | 'killHeal';
 
 /** 每点效果与上限。上限存在是为了防止某一项堆到破坏平衡。 */

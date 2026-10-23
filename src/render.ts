@@ -24,6 +24,7 @@ import { CHARACTERS, CHAR_ORDER, isUnlocked } from './characters';
 import type { World } from './world';
 import type { CharSave } from './save';
 import { availablePoints, outerLevel } from './save';
+import { APT_NAMES, APT_ORDER, aptBase, type Apt } from './balance';
 
 /** 一帧渲染需要的全部只读数据。 */
 export interface View {
@@ -62,6 +63,10 @@ export interface View {
   metaChar: CharKey;
   /** 关外加点光标。 */
   metaCursor: number;
+  /** 掷天资的当前结果。null = 还没掷。 */
+  rollResult: Apt | null;
+  /** 还能掷几次。 */
+  rollLeft: number;
 }
 
 const STAT_LABELS = ['气血', '灵力上限', '移速', '伤害', '冷却缩减', '暴击率', '击杀回血'] as const;
@@ -106,8 +111,14 @@ export function render(v: View): void {
     case 'select':
       paintSelect(v);
       break;
+    case 'roll':
+      paintRoll(v);
+      break;
     case 'meta':
       paintMeta(v);
+      break;
+    case 'points':
+      paintPoints(v);
       break;
     default:
       paintWorld(v);
@@ -150,46 +161,188 @@ function paintSelect(v: View): void {
   text(g, '方向键选择  攻击键确认', WIDTH / 2, 172, C.dim, false);
 }
 
-/** 关外界面：看等级、分修为点。 */
+/** 百分比，带正负号。零点几的差值不显示成 +0%。 */
+function fmtPct(v: number): string {
+  const n = Math.round(v * 100);
+  if (n === 0) return '±0%';
+  return `${n > 0 ? '+' : '−'}${Math.abs(n)}%`;
+}
+
+/** 天资对应的派生说明（一行以内，装得下才写得下）。 */
+function aptNote(key: (typeof APT_ORDER)[number], apt: Apt): string {
+  const base = aptBase(apt);
+  switch (key) {
+    case 'body':
+      return `气血 ${groupNumber(base.maxHp)}`;
+    case 'spirit':
+      return `灵力 ×${base.resourceMul.toFixed(2)} 冷却 ${fmtPct(base.cooldownCut)}`;
+    case 'agility':
+      return `移速 ${fmtPct(base.speedBonus)}`;
+    case 'power':
+      return `伤害 ${fmtPct(base.damageBonus)} 暴击 ${Math.round((0.08 + base.critDelta) * 100)}%`;
+  }
+}
+
+/** 面板：暗底 + 细边。文字压在花哨的地面上会看不清。 */
+function panel(g: CanvasRenderingContext2D, x: number, y: number, w: number, h: number): void {
+  g.fillStyle = 'rgba(11,11,15,0.8)';
+  g.fillRect(x, y, w, h);
+  g.fillStyle = C.stone;
+  g.fillRect(x, y, w, 1);
+  g.fillRect(x, y + h - 1, w, 1);
+  g.fillRect(x, y, 1, h);
+  g.fillRect(x + w - 1, y, 1, h);
+}
+
+/** 掷天资。新角色的第一屏。 */
+function paintRoll(v: View): void {
+  const g = v.g;
+  fillGround(g, v.atlas, groundFrame(0));
+  wash(g, C.void, 0.74);
+
+  text(g, '天 资', WIDTH / 2, 22, C.gold);
+
+  const apt = v.rollResult;
+  if (!apt) {
+    panel(g, 40, 60, 240, 62);
+    text(g, 'J 掷骰', WIDTH / 2, 84, C.light);
+    text(g, '掷出来才知道你是什么料', WIDTH / 2, 106, C.dim);
+    return;
+  }
+
+  panel(g, 24, 40, 272, 92);
+
+  APT_ORDER.forEach((key, i) => {
+    const y = 62 + i * 20;
+    g.fillStyle = C.light;
+    g.font = '12px monospace';
+    g.textAlign = 'left';
+    g.fillText(APT_NAMES[key].name, 36, y);
+
+    g.fillStyle = C.gold;
+    g.textAlign = 'right';
+    g.fillText(String(apt[key]), 112, y);
+
+    g.fillStyle = C.dim;
+    g.textAlign = 'left';
+    g.fillText(aptNote(key, apt), 126, y);
+  });
+
+  const left = v.rollLeft;
+  if (left > 0) {
+    text(g, `J 重掷（还剩 ${left} 次）    K 定下`, WIDTH / 2, 152, C.light);
+  } else {
+    text(g, '次数用完了，K 定下', WIDTH / 2, 152, C.gray);
+  }
+  text(g, '定下之后不再变动', WIDTH / 2, 170, C.dim);
+}
+
+/** 关外界面：看天资、分修为点。 */
 function paintMeta(v: View): void {
   const g = v.g;
   const save = v.saves[v.metaChar];
   const lv = outerLevel(save);
   const points = availablePoints(save);
+  const apt = save.apt;
 
   fillGround(g, v.atlas, groundFrame(0));
-  wash(g, C.void, 0.6);
+  wash(g, C.void, 0.66);
 
-  text(g, CHAR_NAMES[v.metaChar], WIDTH / 2, 18, CHARACTERS[v.metaChar].color);
+  text(g, CHAR_NAMES[v.metaChar], WIDTH / 2, 16, CHARACTERS[v.metaChar].color);
   g.fillStyle = C.dim;
   g.font = '12px monospace';
   g.textAlign = 'center';
-  g.fillText(`关外 ${lv.level} 级  修为 ${groupNumber(save.xiu)}  可分配 ${points}`, WIDTH / 2, 34);
+  g.fillText(`关外 ${lv.level} 级  修为 ${groupNumber(save.xiu)}  可分配 ${points}`, WIDTH / 2, 32);
   g.textAlign = 'left';
 
+  // 天资：掷出来就固定，这里只读。
+  if (apt) {
+    panel(g, 24, 38, 272, 74);
+    APT_ORDER.forEach((key, i) => {
+      const y = 54 + i * 17;
+      g.fillStyle = C.light;
+      g.font = '12px monospace';
+      g.textAlign = 'left';
+      g.fillText(APT_NAMES[key].name, 36, y);
+      g.fillStyle = C.gold;
+      g.textAlign = 'right';
+      g.fillText(String(apt[key]), 110, y);
+      g.fillStyle = C.dim;
+      g.textAlign = 'left';
+      g.fillText(aptNote(key, apt), 124, y);
+    });
+  }
+
+  // 加点：挪到独立一页（K 进），半屏塞 7 行只会挤成一团。
+  if (points > 0) {
+    text(g, 'K 加点', WIDTH / 2, 132, C.gold, false);
+  } else {
+    text(g, '升级后会获得加点', WIDTH / 2, 132, C.gray, false);
+  }
+
+  text(g, 'J 出发   U 返回', WIDTH / 2, 172, C.dim, false);
+}
+
+/** 加点页：7 项一行一个，左右调。 */
+function paintPoints(v: View): void {
+  const g = v.g;
+  const save = v.saves[v.metaChar];
+  const points = availablePoints(save);
+
+  fillGround(g, v.atlas, groundFrame(0));
+  wash(g, C.void, 0.74);
+
+  text(g, `升级加点`, WIDTH / 2, 20, C.gold);
+  g.fillStyle = C.light;
+  g.font = '12px monospace';
+  g.textAlign = 'center';
+  g.fillText(`可分配 ${points}`, WIDTH / 2, 38);
+  g.textAlign = 'left';
+
+  panel(g, 20, 46, 280, 112);
+
   STAT_LABELS.forEach((label, i) => {
-    const y = 44 + i * 16;
+    const y = 62 + i * 14;
     const focused = i === v.metaCursor;
     const key = STAT_KEYS[i]!;
     const val = save.points[key];
 
-    g.fillStyle = focused ? C.floor : C.bg;
-    g.fillRect(36, y, 248, 15);
     if (focused) {
+      g.fillStyle = C.floor;
+      g.fillRect(24, y - 10, 272, 13);
       g.fillStyle = C.gold;
-      g.fillRect(36, y, 2, 15);
+      g.fillRect(24, y - 10, 2, 13);
     }
     g.fillStyle = focused ? C.light : C.dim;
     g.font = '12px monospace';
     g.textAlign = 'left';
-    g.fillText(label, 46, y + 12);
-    g.fillStyle = C.gold;
+    g.fillText(label, 34, y);
+
+    g.fillStyle = C.dim;
     g.textAlign = 'right';
-    g.fillText(String(val), 274, y + 12);
+    g.fillText(`+${fmtStatPer(key, save.points)}`, 226, y);
+
+    g.fillStyle = focused ? C.gold : C.dim;
+    g.textAlign = 'right';
+    g.fillText(String(val), 290, y);
     g.textAlign = 'left';
   });
 
-  text(g, '左右加点  攻击键出发  返回键回选人', WIDTH / 2, 172, C.dim, false);
+  text(g, '左右加减   J / U 返回', WIDTH / 2, 172, C.dim, false);
+}
+
+/** 每一项「每点加多少」，加点页右侧显示。 */
+function fmtStatPer(key: (typeof STAT_KEYS)[number], points: CharSave['points']): string {
+  switch (key) {
+    case 'hp': return '1,200';
+    case 'resource': return '8';
+    case 'speed': return '1%';
+    case 'damage': return '3%';
+    case 'cooldown': return '2%';
+    case 'crit': return '2%';
+    case 'killHeal': return '0.5%';
+  }
+  void points;
 }
 
 /** 战斗与各种覆盖层。 */
@@ -341,7 +494,7 @@ function paintHud(v: View): void {
   g.fillRect(WIDTH - 46, 0, 46, 24);
 
   bar(g, 6, 6, 60, 4, p.hp / p.maxHp, C.danger);
-  if (v.char === 'daoist') bar(g, 6, 12, 60, 3, p.mana / 100, C.thunder);
+  if (v.char === 'daoist') bar(g, 6, 12, 60, 3, p.mana / Math.max(1, p.resMax), C.thunder);
   if (v.char === 'demon') bar(g, 6, 12, 60, 3, p.demon / 100, C.heaven);
 
   g.fillStyle = C.light;

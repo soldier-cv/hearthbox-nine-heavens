@@ -14,10 +14,13 @@ import {
   DODGE,
   INVULN_ON_HIT,
   MANA,
+  ROLL_CHANCES,
   SHARD_PER_LEVEL,
   TIER,
   daoFirstClear,
+  rollApt,
   xiuForLevelClear,
+  type Apt,
 } from './balance';
 import { CHARACTERS, CHAR_ORDER, isUnlocked } from './characters';
 import type { Ctx } from './combat';
@@ -92,6 +95,11 @@ export default defineGame({
     let props: { frame: string; x: number; y: number }[] = [];
     /** 验收截图用的不死。只在 ?debug=1 时能被打开。 */
     let debugInvincible = false;
+    /** 掷骰：当前结果与剩余次数。null = 还没掷。 */
+    let rollResult: Apt | null = null;
+    let rollLeft = ROLL_CHANCES;
+    /** 上一次 beginRun 读到的存档与算出的气血，排查用。 */
+    let debugBegin: { key: CharKey; apt: Apt | null; hp: number } | null = null;
     /**
      * 本次按键是否已经被菜单消费。
      * 不加这个，按 J 跳过过场的同一帧里 update() 会再读到 J，
@@ -168,7 +176,7 @@ export default defineGame({
       const heal = Math.round(player.maxHp * derived.killHeal);
       player.hp = Math.min(player.maxHp, player.hp + heal);
 
-      if (char === 'daoist') player.mana = Math.min(MANA.max, player.mana + MANA.killRestore);
+      if (char === 'daoist') player.mana = Math.min(player.resMax, player.mana + MANA.killRestore);
 
       // 碎片：掉给一个还没满级的槽。
       const slot = player.slots.findIndex((s) => s.level < slotCap(s));
@@ -202,6 +210,7 @@ export default defineGame({
       char = key;
       const save = saves.char(key);
       derived = deriveFromSave(save);
+      debugBegin = { key, apt: save.apt, hp: derived.baseMaxHp };
       player = makePlayer(ctx, derived);
       offers = starterChoices(key).map((id) => ({
         kind: 'skill' as const,
@@ -353,7 +362,7 @@ export default defineGame({
           derived = { ...derived, killHeal: derived.killHeal + 0.005 };
           break;
         case 'mana':
-          player.mana = Math.min(MANA.max + 20, player.mana + 20);
+          player.mana = Math.min(player.resMax, player.mana + 20);
           break;
       }
     }
@@ -401,7 +410,7 @@ export default defineGame({
         const c = combat();
 
         movePlayer(dt);
-        tickPlayer(player, CHARACTERS[char], tune, dt, saves.char(char).points.resource);
+        tickPlayer(player, CHARACTERS[char], tune, dt, saves.char(char).points.resource, derived.resourceMul);
 
         if (player.dodgeCd <= 0 && pressedDodge()) dodge();
         if (!attackConsumed && pressedAttack()) {
@@ -509,7 +518,14 @@ export default defineGame({
       return ctx.input.p1.pressed('right') || ctx.input.keyboard.pressed('KeyD') || ctx.input.keyboard.pressed('ArrowRight');
     }
     function pressedBack(): boolean {
-      return ctx.input.p1.pressed('west') || ctx.input.keyboard.pressed('Escape');
+      // Escape 会被平台当成系统菜单吃掉，游戏收不到。
+      // 真正的返回键是 KeyU（pad 的 west）。
+      return ctx.input.p1.pressed('west') || ctx.input.keyboard.pressed('KeyU')
+        || ctx.input.keyboard.pressed('Escape');
+    }
+    /** 确认（定下天资）。菜单里用，和游戏里的闪避是两个键位。 */
+    function pressedConfirm(): boolean {
+      return ctx.input.p1.pressed('east') || ctx.input.keyboard.pressed('KeyK');
     }
 
     function handleMenus(): void {
@@ -521,17 +537,52 @@ export default defineGame({
           if (!isUnlocked(key, cleared()).ok) return;
           metaChar = key;
           metaCursor = 0;
+          // 新角色先掷天资，老角色直接进关外。
+          if (saves.char(key).apt) {
+            run.to('meta');
+          } else {
+            rollResult = null;
+            rollLeft = ROLL_CHANCES;
+            run.to('roll');
+          }
+        }
+        return;
+      }
+
+      if (run.phase === 'roll') {
+        // 攻击键掷 / 重掷；定下用确认键。掷完才知道自己是什么料。
+        if (menuAttack() && rollLeft > 0) {
+          rollResult = rollApt(() => ctx.random.next());
+          rollLeft -= 1;
+          if (tune.soundOn()) audio.play('ui');
+        }
+        if (rollResult && pressedConfirm()) {
+          const save = saves.char(metaChar);
+          save.apt = rollResult;
+          saves.writeChar(metaChar, save);
+          if (tune.soundOn()) audio.play('ui');
           run.to('meta');
         }
         return;
       }
 
       if (run.phase === 'meta') {
+        if (menuAttack()) beginRun(metaChar);
+        // 有点数时 K 进加点页；没点数按了也没反应。
+        if (pressedConfirm() && availablePoints(saves.char(metaChar)) > 0) {
+          metaCursor = 0;
+          run.to('points');
+        }
+        if (pressedBack()) { cursor = CHAR_ORDER.indexOf(metaChar); run.to('select'); }
+        return;
+      }
+
+      if (run.phase === 'points') {
         if (pressedUp()) metaCursor = (metaCursor + STAT_KEYS.length - 1) % STAT_KEYS.length;
         if (pressedDown()) metaCursor = (metaCursor + 1) % STAT_KEYS.length;
-        if (pressedLeft() || pressedRight()) adjustPoint(pressedRight() ? 1 : -1);
-        if (menuAttack()) beginRun(metaChar);
-        if (pressedBack()) { cursor = CHAR_ORDER.indexOf(metaChar); run.to('select'); }
+        if (pressedLeft()) adjustPoint(-1);
+        if (pressedRight()) adjustPoint(1);
+        if (pressedBack() || menuAttack()) run.to('meta');
         return;
       }
 
@@ -627,6 +678,8 @@ export default defineGame({
         storyChoices,
         metaChar,
         metaCursor,
+        rollResult,
+        rollLeft,
       };
     }
 
@@ -648,6 +701,7 @@ export default defineGame({
         dao: Math.round(player.dao),
         hp: Math.round(player.hp),
         maxHp: player.maxHp,
+        derivedBaseHp: derived.baseMaxHp,
         kills: run.kills,
         enemies: enemies.length,
         nearest: enemies.length
@@ -662,6 +716,11 @@ export default defineGame({
         shape: shape.plan.shape,
         shapeScript: shape.script,
         xiu: save.xiu,
+        apt: save.apt,
+        /** 按存档天资算出来的气血，用来对账。 */
+        expectHp: save.apt ? Math.round((save.apt.body * 80) / 100) * 100 : null,
+        metaChar,
+        debugBegin,
         outerLevel: outerLevelOf(save),
         cleared: save.cleared.slice(),
         points: { ...save.points },
@@ -673,6 +732,15 @@ export default defineGame({
       // 验收截图用：只关掉玩家的受伤。正常游玩时这段不执行。
       debugHook.__nineHeavensInvincible = (on: boolean) => {
         debugInvincible = on === true;
+      };
+
+      // 验收用：直接灌修为，好看看有点数时的加点界面。
+      debugHook.__nineHeavensXiu = (n: number, key: CharKey = char) => {
+        const save = saves.char(key);
+        save.xiu += n;
+        saves.writeChar(key, save);
+        derived = deriveFromSave(saves.char(char));
+        return save.xiu;
       };
 
       // 验收用的跳关钩子：逐个形状截图，不必真打 27 关。
