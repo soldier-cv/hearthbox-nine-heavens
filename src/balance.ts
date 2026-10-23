@@ -201,7 +201,7 @@ const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v
 /**
  * 掷一次天资。
  *
- * 先四项独立随机，再按比例压到总和 1,000。压完会碰到 150/350 的边界，
+ * 先四项独立随机，再按比例压到总和 1,000。压完会碰到上下限，
  * 所以再迭代几次把差额匀给还没顶到边界的项。
  * 最后补舍入误差，保证加起来**正好** 1,000 —— 差一分玩家都会发现。
  */
@@ -244,6 +244,14 @@ export function rollApt(rand01: () => number): Apt {
 /** 天资离基准线多远（1.0 = 250）。 */
 export function aptRatio(v: number): number {
   return v / APT_AVG;
+}
+
+/** 测几块石头。三块择一，比反复重掷更像机缘。 */
+export const STONES = 3;
+
+/** 测一次：出三块石头，每块一套天资。 */
+export function rollStones(rand01: () => number): Apt[] {
+  return Array.from({ length: STONES }, () => rollApt(rand01));
 }
 
 /**

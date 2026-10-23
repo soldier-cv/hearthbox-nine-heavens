@@ -51,17 +51,17 @@ let s = await read();
 console.log('选人后阶段', s?.phase, '（期望 roll）');
 await shoot('00-roll-empty');
 
-// 掷一次
+// 测石
 await page.keyboard.press('KeyJ');
 await page.waitForTimeout(500);
 s = await read();
-console.log('掷骰后阶段', s?.phase, '剩余次数（界面显示 2）');
+console.log('测石后阶段', s?.phase, '石块数', s?.stones?.length ?? 0);
 await shoot('00-roll-result');
 
-// 重掷一次，再定下
+// 换一块石头，再定下
+await page.keyboard.press('ArrowRight');
+await page.waitForTimeout(300);
 await page.keyboard.press('KeyJ');
-await page.waitForTimeout(400);
-await page.keyboard.press('KeyK');
 await page.waitForTimeout(500);
 s = await read();
 console.log('定下后阶段', s?.phase, '存档天资', JSON.stringify(s?.apt));

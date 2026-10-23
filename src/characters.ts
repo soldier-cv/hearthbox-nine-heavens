@@ -48,7 +48,7 @@ export const CHARACTERS: Record<CharKey, CharDef> = {
     color: '#2dd4bf',
     resource: 'mana',
     tagline: '受人之托，把一个人送回山上。',
-    unlockText: '剑客通关第 3 关',
+    unlockText: '剑客过了第三关',
   },
   demon: {
     key: 'demon',
@@ -58,7 +58,7 @@ export const CHARACTERS: Record<CharKey, CharDef> = {
     color: '#f472b6',
     resource: 'demon',
     tagline: '血债簿上有七行，他要一行行划掉。',
-    unlockText: '任意角色通关第 6 关',
+    unlockText: '任一修士过了第六关',
   },
 } as const;
 

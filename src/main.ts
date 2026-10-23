@@ -14,11 +14,10 @@ import {
   DODGE,
   INVULN_ON_HIT,
   MANA,
-  ROLL_CHANCES,
   SHARD_PER_LEVEL,
   TIER,
   daoFirstClear,
-  rollApt,
+  rollStones,
   xiuForLevelClear,
   type Apt,
 } from './balance';
@@ -96,8 +95,9 @@ export default defineGame({
     /** 验收截图用的不死。只在 ?debug=1 时能被打开。 */
     let debugInvincible = false;
     /** 掷骰：当前结果与剩余次数。null = 还没掷。 */
-    let rollResult: Apt | null = null;
-    let rollLeft = ROLL_CHANCES;
+    /** 三块测灵石的结果。null = 还没测。 */
+    let stones: Apt[] | null = null;
+    let stonePick = 0;
     /** 上一次 beginRun 读到的存档与算出的气血，排查用。 */
     let debugBegin: { key: CharKey; apt: Apt | null; hp: number } | null = null;
     /**
@@ -383,7 +383,7 @@ export default defineGame({
       if (plan.n === 9) save.runsCompleted += 1;
       saves.writeChar(char, save);
 
-      summary = `${first ? '首通' : '重刷'} · 修为 +${xiu.toLocaleString('zh-CN')}`;
+      summary = `${first ? '初入' : '再入'} · 修为 +${xiu.toLocaleString('zh-CN')}`;
       if (tune.soundOn()) audio.play(plan.n === 9 ? 'win' : 'levelup');
 
       const finished = plan.n >= 9;
@@ -541,8 +541,8 @@ export default defineGame({
           if (saves.char(key).apt) {
             run.to('meta');
           } else {
-            rollResult = null;
-            rollLeft = ROLL_CHANCES;
+            stones = null;
+            stonePick = 0;
             run.to('roll');
           }
         }
@@ -550,15 +550,20 @@ export default defineGame({
       }
 
       if (run.phase === 'roll') {
-        // 攻击键掷 / 重掷；定下用确认键。掷完才知道自己是什么料。
-        if (menuAttack() && rollLeft > 0) {
-          rollResult = rollApt(() => ctx.random.next());
-          rollLeft -= 1;
-          if (tune.soundOn()) audio.play('ui');
+        // 测一次天资：三块测灵石各显一相，择其一，定下即定终身。
+        if (!stones) {
+          if (menuAttack()) {
+            stones = rollStones(() => ctx.random.next());
+            stonePick = 0;
+            if (tune.soundOn()) audio.play('ui');
+          }
+          return;
         }
-        if (rollResult && pressedConfirm()) {
+        if (pressedLeft()) stonePick = (stonePick + stones.length - 1) % stones.length;
+        if (pressedRight()) stonePick = (stonePick + 1) % stones.length;
+        if (menuAttack()) {
           const save = saves.char(metaChar);
-          save.apt = rollResult;
+          save.apt = stones[stonePick]!;
           saves.writeChar(metaChar, save);
           if (tune.soundOn()) audio.play('ui');
           run.to('meta');
@@ -650,8 +655,8 @@ export default defineGame({
         storyChoices,
         metaChar,
         metaCursor,
-        rollResult,
-        rollLeft,
+        stones,
+        stonePick,
       };
     }
 
@@ -689,6 +694,8 @@ export default defineGame({
         shapeScript: shape.script,
         xiu: save.xiu,
         apt: save.apt,
+        stones,
+        stonePick,
         /** 按存档天资算出来的气血，用来对账。 */
         expectHp: save.apt ? Math.round((save.apt.body * 80) / 100) * 100 : null,
         metaChar,

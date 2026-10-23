@@ -32,19 +32,19 @@ await page.click('body');
 await page.waitForTimeout(600);
 await shot(page, '01-select');
 
-// 选剑客（光标默认在第一项），确认进关外界面。
+// 选剑客（光标默认在第一项）。新角色先测天资。
 await page.keyboard.press('KeyJ');
 await page.waitForTimeout(400);
-await shot(page, '02-meta');
+await shot(page, '02-roll');
 
-// 加点：下移到「伤害」，右加两点。
-await page.keyboard.press('ArrowDown');
-await page.keyboard.press('ArrowDown');
-await page.keyboard.press('ArrowDown');
-await page.keyboard.press('ArrowRight');
+// 测石 -> 换一块 -> 定下
+await page.keyboard.press('KeyJ');
+await page.waitForTimeout(300);
 await page.keyboard.press('ArrowRight');
 await page.waitForTimeout(200);
-await shot(page, '03-meta-points');
+await page.keyboard.press('KeyJ');
+await page.waitForTimeout(400);
+await shot(page, '03-meta');
 
 // 出发。
 await page.keyboard.press('KeyJ');

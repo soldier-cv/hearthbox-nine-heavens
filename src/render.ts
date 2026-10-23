@@ -63,10 +63,10 @@ export interface View {
   metaChar: CharKey;
   /** 关外加点光标。 */
   metaCursor: number;
-  /** 掷天资的当前结果。null = 还没掷。 */
-  rollResult: Apt | null;
-  /** 还能掷几次。 */
-  rollLeft: number;
+  /** 三块测灵石的结果。null = 还没测。 */
+  stones: Apt[] | null;
+  /** 选中第几块。 */
+  stonePick: number;
 }
 
 
@@ -153,7 +153,7 @@ function paintSelect(v: View): void {
     g.fillText(lock.ok ? `${CHAR_VERBS[key]} · ${def.tagline}` : lock.need, 68, y + 29);
   });
 
-  text(g, '方向键选择  攻击键确认', WIDTH / 2, 172, C.dim, false);
+  text(g, '方向键选择   J 确认', WIDTH / 2, 172, C.dim, false);
 }
 
 /** 百分比，带正负号。零点几的差值不显示成 +0%。 */
@@ -188,49 +188,60 @@ function panel(g: CanvasRenderingContext2D, x: number, y: number, w: number, h: 
   g.fillRect(x + w - 1, y, 1, h);
 }
 
-/** 掷天资。新角色的第一屏。 */
+/** 测天资。新角色的第一屏：三块测灵石，择其一。 */
 function paintRoll(v: View): void {
   const g = v.g;
   fillGround(g, v.atlas, groundFrame(0));
   wash(g, C.void, 0.74);
 
-  text(g, '天 资', WIDTH / 2, 22, C.gold);
-  text(g, '下面是练到三十级的样子', WIDTH / 2, 40, C.dim);
+  text(g, '测 天 资', WIDTH / 2, 20, C.gold);
 
-  const apt = v.rollResult;
-  if (!apt) {
-    panel(g, 40, 68, 240, 56);
-    text(g, 'J 掷骰', WIDTH / 2, 90, C.light);
-    text(g, '掷出来才知道你是什么料', WIDTH / 2, 112, C.dim);
+  if (!v.stones) {
+    text(g, '三块测灵石，各显一相', WIDTH / 2, 38, C.dim);
+    panel(g, 40, 64, 240, 58);
+    text(g, 'J 测石', WIDTH / 2, 88, C.light);
+    text(g, '灵石只认一次，看过便知', WIDTH / 2, 110, C.dim);
     return;
   }
 
-  panel(g, 24, 50, 272, 92);
+  text(g, '三块测灵石，择其一', WIDTH / 2, 36, C.dim);
 
-  const top = outerStats(apt, 30);
-  APT_ORDER.forEach((key, i) => {
-    const y = 72 + i * 20;
-    g.fillStyle = C.light;
-    g.font = '12px monospace';
-    g.textAlign = 'left';
-    g.fillText(APT_NAMES[key].name, 36, y);
+  const COLS = [168, 216, 264];
+  const STONE_NAMES = ['甲', '乙', '丙'];
 
-    g.fillStyle = C.gold;
-    g.textAlign = 'right';
-    g.fillText(String(apt[key]), 112, y);
+  // 选中的那一列先铺底，再写字。
+  g.fillStyle = C.floor;
+  g.fillRect(COLS[v.stonePick]! - 34, 54, 44, 72);
 
-    g.fillStyle = C.dim;
-    g.textAlign = 'left';
-    g.fillText(aptNote(key, top), 126, y);
+  g.font = '12px monospace';
+  g.textAlign = 'right';
+  STONE_NAMES.forEach((name, i) => {
+    g.fillStyle = i === v.stonePick ? C.gold : C.gray;
+    g.fillText(name, COLS[i]!, 48);
   });
 
-  const left = v.rollLeft;
-  if (left > 0) {
-    text(g, `J 重掷（还剩 ${left} 次）    K 定下`, WIDTH / 2, 158, C.light);
-  } else {
-    text(g, '次数用完了，K 定下', WIDTH / 2, 158, C.gray);
-  }
-  text(g, '定下之后不再变动', WIDTH / 2, 174, C.dim);
+  APT_ORDER.forEach((key, r) => {
+    const y = 70 + r * 16;
+    g.textAlign = 'left';
+    g.fillStyle = C.dim;
+    g.fillText(APT_NAMES[key].name, 40, y);
+
+    g.textAlign = 'right';
+    v.stones!.forEach((apt, i) => {
+      g.fillStyle = i === v.stonePick ? C.light : C.gray;
+      g.fillText(String(apt[key]), COLS[i]!, y);
+    });
+  });
+
+  const picked = v.stones[v.stonePick]!;
+  const top = outerStats(picked, 30);
+  g.textAlign = 'center';
+  g.fillStyle = C.dim;
+  g.fillText(`三十重  气血 ${groupNumber(top.maxHp)}   伤害 ${fmtPct(top.damageBonus)}`, WIDTH / 2, 144);
+  g.fillText(`暴击 ${Math.round(top.crit * 100)}%   移速 ${fmtPct(top.speedBonus)}   冷却 ${fmtPct(top.cooldownCut)}`, WIDTH / 2, 158);
+  g.textAlign = 'left';
+
+  text(g, '← → 换石    J 定下', WIDTH / 2, 174, C.dim);
 }
 
 /** 关外界面：看天资、分修为点。 */
@@ -248,7 +259,7 @@ function paintMeta(v: View): void {
   g.fillStyle = C.dim;
   g.font = '12px monospace';
   g.textAlign = 'center';
-  g.fillText(`关外 ${lv.level} 级  修为 ${groupNumber(save.xiu)}`, WIDTH / 2, 32);
+  g.fillText(`道基 ${lv.level} 重  修为 ${groupNumber(save.xiu)}`, WIDTH / 2, 32);
   g.textAlign = 'left';
 
   // 天资决定起点，也决定每级涨多快。这一屏只读。
@@ -273,7 +284,7 @@ function paintMeta(v: View): void {
   g.fillStyle = C.gray;
   g.font = '12px monospace';
   g.textAlign = 'center';
-  g.fillText(`30 级  气血 ${groupNumber(top.maxHp)}  伤害 ${fmtPct(top.damageBonus)}`, WIDTH / 2, 148);
+  g.fillText(`三十重  气血 ${groupNumber(top.maxHp)}  伤害 ${fmtPct(top.damageBonus)}`, WIDTH / 2, 148);
   g.fillText(`暴击 ${Math.round(top.crit * 100)}%  移速 ${fmtPct(top.speedBonus)}  冷却 ${fmtPct(top.cooldownCut)}`, WIDTH / 2, 162);
   g.textAlign = 'left';
 
@@ -438,7 +449,7 @@ function paintHud(v: View): void {
   const realm = plan ? REALMS[plan.n - 1] : '';
   g.fillText(`${realm} ${plan?.n ?? 0}/9`, 6, 28);
   g.textAlign = 'right';
-  g.fillText(`${Math.ceil(v.timeLeft)}s`, WIDTH - 6, 28);
+  g.fillText(`余 ${Math.ceil(v.timeLeft)} 秒`, WIDTH - 6, 28);
   g.textAlign = 'left';
 
   // 道行。中文 12px，一个字大约 12 像素宽，数字跟在后面单独画，
@@ -497,7 +508,7 @@ function paintCutscene(v: View): void {
     text(g, TERRAINS[plan.terrain] ?? '', WIDTH / 2, 78, C.light);
     text(g, v.cutText, WIDTH / 2, 104, C.dim);
   }
-  text(g, '攻击键继续', WIDTH / 2, 150, C.gray, false);
+  text(g, 'J 继续', WIDTH / 2, 150, C.gray, false);
 }
 
 function paintStarter(v: View): void {
@@ -519,13 +530,13 @@ function paintStarter(v: View): void {
     g.fillText(offer.blurb, 46, y + 32);
   });
 
-  text(g, '方向键选择  攻击键确认', WIDTH / 2, 172, C.dim, false);
+  text(g, '方向键选择   J 确认', WIDTH / 2, 172, C.dim, false);
 }
 
 function paintOffers(v: View): void {
   const g = v.g;
   dim(g);
-  text(g, v.offers.some((o) => o.kind === 'branch') ? '二选一' : '三选一', WIDTH / 2, 20, C.gold);
+  text(g, v.offers.some((o) => o.kind === 'branch') ? '择 路' : '参 悟', WIDTH / 2, 20, C.gold);
 
   v.offers.forEach((offer, i) => {
     const y = 32 + i * 46;
@@ -568,7 +579,7 @@ function paintEnd(v: View): void {
   const color = v.phase === 'dead' ? C.danger : v.phase === 'won' ? C.heaven : C.gold;
   text(g, title, WIDTH / 2, 70, color);
   text(g, v.summary, WIDTH / 2, 96, C.dim);
-  text(g, v.phase === 'cleared' ? '攻击键继续' : '攻击键重来', WIDTH / 2, 120, C.gray, false);
+  text(g, v.phase === 'cleared' ? 'J 继续' : 'J 重来', WIDTH / 2, 120, C.gray, false);
 }
 
 export type { SpellId };
