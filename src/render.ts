@@ -325,6 +325,11 @@ function paintHud(v: View): void {
   const p = v.p!;
   const plan = v.plan;
 
+  // 浅色地形（双生洞、雷池）上白字完全看不清，HUD 必须自带衬底。
+  g.fillStyle = 'rgba(11,11,15,0.62)';
+  g.fillRect(0, 0, 132, 50);
+  g.fillRect(WIDTH - 46, 0, 46, 24);
+
   bar(g, 6, 6, 60, 4, p.hp / p.maxHp, C.danger);
   if (v.char === 'daoist') bar(g, 6, 12, 60, 3, p.mana / 100, C.thunder);
   if (v.char === 'demon') bar(g, 6, 12, 60, 3, p.demon / 100, C.heaven);

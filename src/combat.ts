@@ -518,8 +518,16 @@ function fleeFrom(e: Enemy, px: number, py: number, speed: number, dt: number, c
     dx = Math.cos(a);
     dy = Math.sin(a);
   }
-  const nx = clamp(e.x + dx * speed * dt, 8, WIDTH - 8);
-  const ny = clamp(e.y + dy * speed * dt, 8, HEIGHT - 8);
+  let nx = e.x + dx * speed * dt;
+  let ny = e.y + dy * speed * dt;
+  const hitX = nx < 8 || nx > WIDTH - 8;
+  const hitY = ny < 8 || ny > HEIGHT - 8;
+  nx = clamp(nx, 8, WIDTH - 8);
+  ny = clamp(ny, 8, HEIGHT - 8);
+  // 贴到墙就沿墙跑。否则它被逼到边缘就站住不动，
+  // 「追一个要跳崖的人」变成走两步碰到 —— 追的过程整个没了。
+  if (hitY) nx = clamp(nx + Math.sign(e.x - px || 1) * speed * dt, 8, WIDTH - 8);
+  if (hitX) ny = clamp(ny + Math.sign(e.y - py || 1) * speed * dt, 8, HEIGHT - 8);
   e.x = nx;
   e.y = ny;
 }
@@ -552,24 +560,32 @@ function crawl(e: Enemy, ctx: Ctx, dt: number): void {
   e.y += ((ty - e.y) / d) * step;
 }
 
-/** 直线冲刺体（噬骨鸦、无主飞剑）：定方向后不看玩家。 */
+/** 直线冲刺体（噬骨鸦、无主飞剑）：定方向后不看玩家，冲完停一秒。 */
 function straightMove(e: Enemy, speed: number, dt: number, ctx: Ctx): void {
+  // 冲完歇一下。玩家要靠这一拍读懂它的节奏，不然就是贴脸乱撞。
+  if (e.regenIdle > 0) {
+    e.regenIdle -= dt;
+    return;
+  }
+
   if (e.vx === 0 && e.vy === 0) {
     const a = Math.atan2(ctx.p.y - e.y, ctx.p.x - e.x) + (ctx.rand01() - 0.5) * 0.5;
     e.vx = Math.cos(a) * speed;
     e.vy = Math.sin(a) * speed;
     e.telegraph = 0.4; // 起手亮一下，给"线型"预警
-  } else {
-    e.x += e.vx * dt;
-    e.y += e.vy * dt;
-    e.telegraph = Math.max(0, e.telegraph - dt);
-    if (e.x < -24 || e.x > WIDTH + 24 || e.y < -24 || e.y > HEIGHT + 24) {
-      // 冲出去了：收回来重新瞄准，否则场上会只剩它。
-      e.vx = 0;
-      e.vy = 0;
-      e.x = clamp(e.x, 10, WIDTH - 10);
-      e.y = clamp(e.y, 10, HEIGHT - 10);
-    }
+    return;
+  }
+
+  e.x += e.vx * dt;
+  e.y += e.vy * dt;
+  e.telegraph = Math.max(0, e.telegraph - dt);
+  if (e.x < -24 || e.x > WIDTH + 24 || e.y < -24 || e.y > HEIGHT + 24) {
+    // 冲出去了：收回来重新瞄准，否则场上会只剩它。
+    e.vx = 0;
+    e.vy = 0;
+    e.x = clamp(e.x, 12, WIDTH - 12);
+    e.y = clamp(e.y, 12, HEIGHT - 12);
+    e.regenIdle = 1;
   }
 }
 
@@ -693,6 +709,18 @@ export function updateEnemies(ctx: Ctx, dt: number): void {
     if (e.def.key === 'twinDaoists') {
       e.regenIdle += dt;
       if (e.regenIdle >= 2 && e.hpPool) e.hpPool.hp = Math.min(e.hpPool.max, e.hpPool.hp + e.hpPool.max * 0.02 * dt);
+      // 两人都朝玩家走，会叠成一个蓝团，看不出是两只。互相推开一点。
+      for (const o of ctx.enemies) {
+        if (o === e || o.def.key !== 'twinDaoists') continue;
+        const dx = e.x - o.x;
+        const dy = e.y - o.y;
+        const gap = Math.hypot(dx, dy);
+        if (gap > 0.001 && gap < 22) {
+          const push = (22 - gap) / 2;
+          e.x += (dx / gap) * push;
+          e.y += (dy / gap) * push;
+        }
+      }
     }
     // 残将：天兵活着时免疫。
     if (e.def.key === 'thunderGeneral') {
@@ -731,8 +759,15 @@ export function updateEnemies(ctx: Ctx, dt: number): void {
       }
     }
 
-    e.x = clamp(e.x, 4, WIDTH - 4);
-    e.y = clamp(e.y, 4, HEIGHT - 4);
+    // 直线冲刺体必须能飞出屏幕，否则它永远触发不了「冲出去再回来」，
+    // 会卡在边上一直朝外飞。其余敌人夹在屏幕内，不能跑丢。
+    if (e.purpose === 'straight') {
+      e.x = clamp(e.x, -40, WIDTH + 40);
+      e.y = clamp(e.y, -40, HEIGHT + 40);
+    } else {
+      e.x = clamp(e.x, 4, WIDTH - 4);
+      e.y = clamp(e.y, 4, HEIGHT - 4);
+    }
 
     trySkill(e, ctx, dt);
 

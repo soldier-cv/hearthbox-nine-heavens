@@ -9,7 +9,7 @@
  * 判据（docs/routes.md）：去掉地形贴图、只留机制，还分得清是哪一关。
  */
 
-import { C, HEIGHT, WIDTH } from './config';
+import { C, HEIGHT, PLAYER, WIDTH } from './config';
 import { TIER } from './balance';
 import type { Ctx } from './combat';
 import { spawnEnemy } from './combat';
@@ -417,9 +417,10 @@ const shapeHunt: Shape = {
   begin(s, c) {
     const target = ensureWarlord(s, c);
     if (target) {
-      // 逃得动才行：目标速度只能略低于玩家（85%），
-      // 高于玩家就是追一个不会累的东西，很烦。
-      target.speed = Math.round(c.p.speedMul * 62);
+      // 逃得动才行：目标速度定成玩家实际速度的 80%（docs 要求 70~85%）。
+      // 不能用 p.speedMul —— 那是暂时增益的倍率，不是速度；
+      // 乘上去会让吃了加速的目标反而比玩家快，永远追不上。
+      target.speed = Math.round(PLAYER.speed * (1 + c.speedBonus) * 0.8);
       target.purpose = 'flee';
       target.skillOn = true;
     }

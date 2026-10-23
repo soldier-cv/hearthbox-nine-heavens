@@ -185,7 +185,7 @@ export function daoThreshold(pickIndex: number): number {
 }
 
 /** 过关道行。 */
-export const DAO_CLEAR = 45000;
+export const DAO_CLEAR = 85_000;
 /** 首杀额外道行（按关递增，让前期升级更快）。 */
 export function daoFirstClear(levelIndex: number): number {
   return 20000 + 10000 * levelIndex;

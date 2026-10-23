@@ -24,7 +24,7 @@ import type { Ctx } from './combat';
 import { cast, resolveTelegraph, spawnEnemy, updateBolts, updateEnemies, updateFields } from './combat';
 import { C, HEIGHT, PLAYER, WIDTH } from './config';
 import type { Enemy } from './entities';
-import { getHp } from './entities';
+import { getHp, getMaxHp } from './entities';
 import { keywordSum } from './keywords';
 import type { Offer } from './offers';
 import { daoToNext, makeOffers, starterChoices } from './offers';
@@ -86,6 +86,14 @@ export default defineGame({
     let metaCursor = 0;
     /** 本局是否用过金手指。用过的局不记成就。 */
     let tainted = false;
+    /** 三选一结束后回到哪个阶段。平时回 playing，过关那一刻触发则回 cleared。 */
+    let afterChoice: 'playing' | 'cleared' | 'won' = 'playing';
+    /**
+     * 本次按键是否已经被菜单消费。
+     * 不加这个，按 J 跳过过场的同一帧里 update() 会再读到 J，
+     * 于是刚进关就自动放了一招 —— 道人第 7 关「打他就输」会当场判负。
+     */
+    let attackConsumed = false;
 
     const cleared = (): Record<CharKey, number> => clearedByCharFrom(saves);
 
@@ -282,7 +290,10 @@ export default defineGame({
       }
       player.picks += 1;
       offers = [];
-      run.to('playing');
+      // 回到进来之前的阶段：战斗中回 playing，过关那一刻触发则回 cleared。
+      const next = afterChoice;
+      afterChoice = 'playing';
+      run.to(next);
     }
 
     function applyStatOffer(stat: string): void {
@@ -331,12 +342,18 @@ export default defineGame({
       summary = `${first ? '首通' : '重刷'} · 修为 +${xiu.toLocaleString('zh-CN')}`;
       if (tune.soundOn()) audio.play(plan.n === 9 ? 'win' : 'levelup');
 
-      if (plan.n >= 9) {
-        run.to('won');
-        audio.stopDrone();
+      const finished = plan.n >= 9;
+      if (finished) audio.stopDrone();
+
+      // 过关道行可能刚好把道行推过门槛。这一下必须当场给选择，
+      // 否则要等到下一关第一次击杀才弹 —— 玩家会以为奖励被吞了。
+      if (daoToNext(player) <= 0 && player.picks < 12) {
+        afterChoice = finished ? 'won' : 'cleared';
+        openChoice(false);
         return;
       }
-      run.to('cleared');
+
+      run.to(finished ? 'won' : 'cleared');
     }
 
     // ---- 每帧 ----
@@ -352,9 +369,7 @@ export default defineGame({
         tickPlayer(player, CHARACTERS[char], tune, dt, saves.char(char).points.resource);
 
         if (player.dodgeCd <= 0 && pressedDodge()) dodge();
-        if (pressedAttack()) {
-          // 一按只放冷却好的那一招。三个槽同时放会把角色自己盖住，
-          // 也让「冷却」这个代价失去意义。
+        if (!attackConsumed && pressedAttack()) {
           const ready = player.slots.find((s) => s.cd <= 0);
           if (ready) cast(c, ready);
         }
@@ -436,6 +451,13 @@ export default defineGame({
     function pressedAttack(): boolean {
       return ctx.input.p1.pressed('south') || ctx.input.keyboard.pressed('KeyJ');
     }
+
+    /** 菜单里的攻击键：消费掉这次按键，同一帧里 update() 就不能再拿它放大招。 */
+    function menuAttack(): boolean {
+      if (!pressedAttack()) return false;
+      attackConsumed = true;
+      return true;
+    }
     function pressedDodge(): boolean {
       return ctx.input.p1.pressed('east') || ctx.input.keyboard.pressed('KeyK');
     }
@@ -459,7 +481,7 @@ export default defineGame({
       if (run.phase === 'select') {
         if (pressedUp()) cursor = (cursor + CHAR_ORDER.length - 1) % CHAR_ORDER.length;
         if (pressedDown()) cursor = (cursor + 1) % CHAR_ORDER.length;
-        if (pressedAttack()) {
+        if (menuAttack()) {
           const key = CHAR_ORDER[cursor]!;
           if (!isUnlocked(key, cleared()).ok) return;
           metaChar = key;
@@ -473,7 +495,7 @@ export default defineGame({
         if (pressedUp()) metaCursor = (metaCursor + STAT_KEYS.length - 1) % STAT_KEYS.length;
         if (pressedDown()) metaCursor = (metaCursor + 1) % STAT_KEYS.length;
         if (pressedLeft() || pressedRight()) adjustPoint(pressedRight() ? 1 : -1);
-        if (pressedAttack()) beginRun(metaChar);
+        if (menuAttack()) beginRun(metaChar);
         if (pressedBack()) { cursor = CHAR_ORDER.indexOf(metaChar); run.to('select'); }
         return;
       }
@@ -481,19 +503,19 @@ export default defineGame({
       if (run.phase === 'starter') {
         if (pressedUp()) cursor = (cursor + offers.length - 1) % offers.length;
         if (pressedDown()) cursor = (cursor + 1) % offers.length;
-        if (pressedAttack()) chooseStarter(cursor);
+        if (menuAttack()) chooseStarter(cursor);
         return;
       }
 
       if (run.phase === 'cutscene') {
-        if (pressedAttack()) enterLevel();
+        if (menuAttack()) enterLevel();
         return;
       }
 
       if (run.phase === 'choosing') {
         if (pressedUp()) cursor = (cursor + offers.length - 1) % Math.max(1, offers.length);
         if (pressedDown()) cursor = (cursor + 1) % Math.max(1, offers.length);
-        if (pressedAttack()) {
+        if (menuAttack()) {
           const offer = offers[cursor];
           if (offer) applyOffer(offer);
         }
@@ -502,7 +524,7 @@ export default defineGame({
 
       if (run.phase === 'story-choice') {
         if (pressedUp() || pressedDown()) cursor = cursor === 0 ? 1 : 0;
-        if (pressedAttack()) {
+        if (menuAttack()) {
           const save = saves.char(char);
           save.demonAccepted = cursor === 0;
           if (cursor === 0) {
@@ -517,12 +539,12 @@ export default defineGame({
       }
 
       if (run.phase === 'cleared') {
-        if (pressedAttack()) startLevel(run.level + 1);
+        if (menuAttack()) startLevel(run.level + 1);
         return;
       }
 
       if (run.phase === 'dead' || run.phase === 'won') {
-        if (pressedAttack()) {
+        if (menuAttack()) {
           cursor = 0;
           run.reset();
           audio.stopDrone();
@@ -591,7 +613,18 @@ export default defineGame({
         hp: Math.round(player.hp),
         maxHp: player.maxHp,
         kills: run.kills,
+        enemies: enemies.length,
+        nearest: enemies.length
+          ? Math.round(Math.min(...enemies.map((e) => Math.hypot(e.x - player.x, e.y - player.y))))
+          : -1,
+        enemyList: enemies.slice(0, 3).map(
+          (e) => `${e.def.key}@${Math.round(e.x)},${Math.round(e.y)} hp=${Math.round(getHp(e))}/${Math.round(getMaxHp(e))} v=${Math.round(e.vx)},${Math.round(e.vy)} sp=${e.speed} tel=${e.telegraph.toFixed(1)}`,
+        ),
         slots: player.slots.length,
+        slotsDetail: player.slots.map((s) => `${s.id}:${s.level}${s.branch ? '/' + s.branch : ''}`),
+        picks: player.picks,
+        shape: shape.plan.shape,
+        shapeScript: shape.script,
         xiu: save.xiu,
         outerLevel: outerLevelOf(save),
         cleared: save.cleared.slice(),
@@ -600,8 +633,28 @@ export default defineGame({
       };
     }
 
+    if (debugHook) {
+      // 验收用的跳关钩子：逐个形状截图，不必真打 27 关。
+      // 只在 ?debug=1 时存在，正常游玩时这段不执行。
+      debugHook.__nineHeavensJump = (level: number, key: CharKey = char) => {
+        char = key;
+        const save = saves.char(key);
+        derived = deriveFromSave(save);
+        player = makePlayer(ctx, derived);
+        // 空槽打不了架，给两门基础功法。
+        const starters = starterChoices(key).slice(0, 2);
+        player.slots = starters.map((id) => ({
+          id, kind: 'base' as const, level: 1, branch: null, cd: 0, shards: 0,
+        }));
+        player.picks = 0;
+        startLevel(level);
+        return `${key} L${level} ${plan.shape}`;
+      };
+    }
+
     return {
       update(dt: number) {
+        attackConsumed = false;
         handleMenus();
         update(dt);
         publishDebug();
