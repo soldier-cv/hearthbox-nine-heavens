@@ -12,7 +12,7 @@ import type { CharDef } from './characters';
 import type { PlayerState, Slot } from './player';
 import { slotCap } from './player';
 import type { BranchId, CharKey, FusionId, SpellId } from './skills';
-import { BRANCHES, FUSIONS, SPELLS, STARTERS, availableFusions, unlockTier } from './skills';
+import { BRANCHES, FUSIONS, SPELLS, STARTERS, availableFusions } from './skills';
 import { keywordPool } from './keywords';
 export type Offer =
   | { kind: 'enhance'; slotIndex: number; title: string; blurb: string }
@@ -110,17 +110,14 @@ function learnable(p: PlayerState, char: CharKey, level: number): SpellId[] {
   return pool;
 }
 
-function pickBranchCandidates(p: PlayerState, char: CharKey, level: number): { slotIndex: number; branch: BranchId }[] {
+/** 关外买过的分支才会进卡池（docs/skills.md 功法谱）。 */
+function pickBranchCandidates(p: PlayerState, learned: string[]): { slotIndex: number; branch: BranchId }[] {
   const out: { slotIndex: number; branch: BranchId }[] = [];
-  const tiers = unlockTier(level);
   p.slots.forEach((s, i) => {
     if (s.kind !== 'base' || s.branch) return;
-    // 关外没解锁的分支不出现。5 级前一条分支都不给。
-    if (tiers.branches < 1) return;
     const spell = SPELLS[s.id as SpellId];
-    spell.branches.forEach((b, bi) => {
-      if (bi === 1 && tiers.branches < 2) return;
-      out.push({ slotIndex: i, branch: b });
+    spell.branches.forEach((b) => {
+      if (learned.includes(b)) out.push({ slotIndex: i, branch: b });
     });
   });
   return out;
@@ -130,10 +127,12 @@ export interface MakeContext {
   p: PlayerState;
   char: CharKey;
   def: CharDef;
-  /** 关外等级，限制能选哪些分支。 */
+  /** 关外等级，属性成长用。 */
   level: number;
   /** 已拿的词条。 */
   ownedKeywords: string[];
+  /** 已买的功法 id。没买的分支和融合永远不出现。 */
+  learned: string[];
 }
 
 /** 生成三张卡。 */
@@ -152,7 +151,7 @@ export function makeOffers(
 
   const enhanceIdx = enhanceable(ctx.p);
   const skillPool = learnable(ctx.p, ctx.char, ctx.level);
-  const branchPool = pickBranchCandidates(ctx.p, ctx.char, ctx.level);
+  const branchPool = pickBranchCandidates(ctx.p, ctx.learned);
   const availableKeywords = keywordPool(ctx.char).filter((k) => !ctx.ownedKeywords.includes(k.id));
   const statPool = (Object.keys(STAT_OFFERS) as StatOffer[]).filter(
     (s) => s !== 'mana' || ctx.char === 'daoist',
@@ -204,17 +203,17 @@ export function makeOffers(
     return slot !== undefined && slot.level >= 5 && !slot.branch;
   });
   if (forcedBranch.length) {
-    // 二选一，不可逆：只放这个技能的两条分支，别的都不给。
-    const target = forcedBranch[0]!;
-    const slot = ctx.p.slots[target.slotIndex]!;
-    const spell = SPELLS[slot.id as SpellId];
-    return spell.branches.map((b) => ({
-      kind: 'branch' as const,
-      slotIndex: target.slotIndex,
-      branch: b,
-      title: BRANCHES[b].name,
-      blurb: BRANCHES[b].blurb,
-    }));
+    // 只放这个技能里**买过**的分支：买一条就是一条，买两条才是二选一。
+    const slotIndex = forcedBranch[0]!.slotIndex;
+    return forcedBranch
+      .filter((b) => b.slotIndex === slotIndex)
+      .map((b) => ({
+        kind: 'branch' as const,
+        slotIndex,
+        branch: b.branch,
+        title: BRANCHES[b.branch].name,
+        blurb: BRANCHES[b.branch].blurb,
+      }));
   }
 
   if (fusion) picks.push(fusion);
@@ -242,9 +241,9 @@ export function makeFusionOffer(ctx: MakeContext): Offer | null {
   if (owned.length < 2) return null;
   const fusions = availableFusions(owned, ctx.char);
   if (!fusions.length) return null;
-  const tiers = unlockTier(ctx.level);
-  if (tiers.fusions < 1) return null;
   const f = fusions[0]!;
+  // 没买这条融合功法，永远不出。
+  if (!ctx.learned.includes(f.id)) return null;
   const sacrifices = ctx.p.slots
     .filter((s) => s.branch && f.needs.includes(s.branch))
     .map((s) => nameOf(s));

@@ -15,9 +15,7 @@ import {
   MANA,
   MAX_FUSION_LEVEL,
   MAX_SKILL_LEVEL,
-  NEUTRAL_APT,
   SWORD_INTENT,
-  outerStats,
   cooldownOf,
   levelFromXiu,
   playerHit,
@@ -27,6 +25,7 @@ import { resourceBracket, resourceSpeedBonus } from './characters';
 import type { BranchId, FusionId, SpellId } from './skills';
 import { BRANCHES, FUSIONS, SPELLS } from './skills';
 import type { CharSave } from './save';
+import { outerStatsOf } from './outer';
 import type { Tuning } from './tuning';
 
 /** 一个已学会的技能槽。 */
@@ -65,6 +64,8 @@ export interface PlayerState {
   mana: number;
   /** 灵力上限（灵机与加点共同决定）。渲染和回复都读它，不要另算。 */
   resMax: number;
+  /** 灵力每秒回复倍率（关外被动）。 */
+  manaRegenMul: number;
   /** 魔头的魔气。 */
   demon: number;
   /** 入魔剩余秒数。 */
@@ -113,18 +114,19 @@ export interface Derived {
   crit: number;
   killHeal: number;
   damageBonus: number;
+  /** 灵力回复倍率（关外被动「引气」）。 */
+  manaRegenMul: number;
 }
 
 export function outerLevelOf(save: CharSave): number {
   return levelFromXiu(save.xiu).level;
 }
 
-/** 从存档算出这一局的关外起点。资质决定起点，也决定每级涨多快。 */
+/** 从存档算出这一局的关外起点：天资 × 属性点 × 被动功法。 */
 export function deriveFromSave(save: CharSave): Derived {
-  const level = outerLevelOf(save);
-  const s = outerStats(save.apt ?? NEUTRAL_APT, level);
+  const s = outerStatsOf(save);
   return {
-    level,
+    level: s.level,
     baseMaxHp: s.maxHp,
     resourceMul: s.resourceMul,
     cooldownCut: s.cooldownCut,
@@ -132,6 +134,7 @@ export function deriveFromSave(save: CharSave): Derived {
     crit: s.crit,
     killHeal: s.killHeal,
     damageBonus: s.damageBonus,
+    manaRegenMul: s.manaRegenMul,
   };
 }
 
@@ -143,6 +146,7 @@ export function makePlayer(ctx: GameContext, derived: Derived): PlayerState {
     maxHp: derived.baseMaxHp,
     mana: MANA.startPool,
     resMax: MANA.max,
+    manaRegenMul: derived.manaRegenMul,
     demon: 0,
     burst: 0,
     sinceHit: 0,
@@ -311,7 +315,7 @@ export function tickPlayer(
   p.sinceHit += dt;
 
   if (def.key === 'daoist') {
-    p.mana = Math.min(p.resMax, p.mana + MANA.regen * dt);
+    p.mana = Math.min(p.resMax, p.mana + MANA.regen * p.manaRegenMul * dt);
   }
 
   if (def.key === 'demon') {

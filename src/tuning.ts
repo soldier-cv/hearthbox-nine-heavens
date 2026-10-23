@@ -37,6 +37,12 @@ export interface Tuning {
   soundOn: () => boolean;
   /** 跳过已看过的过场。 */
   skipCutscenes: () => boolean;
+  /** 自动出手（冷却好了自己放）。 */
+  autoCast: () => boolean;
+  /** 自动拾取（掉落物磁吸）。 */
+  autoPickup: () => boolean;
+  /** 自动选卡（倒计时到点自己选）。 */
+  autoPick: () => boolean;
 }
 
 /** 原版：什么都不改。 */
@@ -55,6 +61,9 @@ export const baseline: Tuning = {
   damageNumbers: () => true,
   soundOn: () => true,
   skipCutscenes: () => false,
+  autoCast: () => true,
+  autoPickup: () => true,
+  autoPick: () => true,
 };
 
 /**
@@ -200,6 +209,34 @@ export function declareOptions(ctx: GameContext): void {
     defaultEnabled: true,
   });
 
+  // ---- 设置项：自动化（docs/automation.md） ----
+  o.declare({
+    id: 'auto-cast',
+    name: '自动出手',
+    description: '冷却好了自动对最近的敌人出手。关掉后要按 J 才放。',
+    kind: 'boolean',
+    scope: 'setting',
+    defaultEnabled: true,
+  });
+
+  o.declare({
+    id: 'auto-pickup',
+    name: '自动拾取',
+    description: '道行碎片与血珠、灵珠会自己飞过来。关掉后要走到上面才捡。',
+    kind: 'boolean',
+    scope: 'setting',
+    defaultEnabled: true,
+  });
+
+  o.declare({
+    id: 'auto-pick',
+    name: '自动推进',
+    description: '三选一、开局选功法、过场和过关都自己往下走。按方向键或 J 随时接管。',
+    kind: 'boolean',
+    scope: 'setting',
+    defaultEnabled: true,
+  });
+
   // ---- 成就：只读 ----
   for (const [id, name, description] of [
     ['deepest-level', '最深境界', '三个角色里到达过的最下一关。'],
@@ -231,5 +268,8 @@ export function tuned(ctx: GameContext): Tuning {
     damageNumbers: () => o.enabled('damage-numbers'),
     soundOn: () => o.enabled('sound'),
     skipCutscenes: () => o.enabled('skip-cutscene'),
+    autoCast: () => o.enabled('auto-cast'),
+    autoPickup: () => o.enabled('auto-pickup'),
+    autoPick: () => o.enabled('auto-pick'),
   };
 }

@@ -23,8 +23,8 @@ import type { CharDef } from './characters';
 import { CHARACTERS, CHAR_ORDER, isUnlocked } from './characters';
 import type { World } from './world';
 import type { CharSave } from './save';
-import { outerLevel } from './save';
-import { APT_NAMES, APT_ORDER, NEUTRAL_APT, outerStats, type Apt, type OuterStats } from './balance';
+import { APT_NAMES, APT_ORDER, NEUTRAL_APT, outerStats, type Apt } from './balance';
+import { ATTR_LINES, GONGFA } from './outer';
 
 /** 一帧渲染需要的全部只读数据。 */
 export interface View {
@@ -61,12 +61,22 @@ export interface View {
   storyChoices: { title: string; blurb: string }[];
   /** 关外界面里正在看哪个角色。 */
   metaChar: CharKey;
-  /** 关外加点光标。 */
+  /** 关外界面光标行。 */
   metaCursor: number;
+  /** 关外栏位：属性 / 功法谱。 */
+  metaTab: 'attr' | 'gongfa';
+  /** 功法谱滚动窗口起点。 */
+  metaTop: number;
+  /** 还能花的悟道点。 */
+  metaPoints: number;
+  /** 道基（关外等级）。 */
+  metaLevel: number;
   /** 三块测灵石的结果。null = 还没测。 */
   stones: Apt[] | null;
   /** 选中第几块。 */
   stonePick: number;
+  /** 自动选卡还剩几秒。0 = 这一次由玩家决定。 */
+  autoChoiceIn: number;
 }
 
 
@@ -163,20 +173,6 @@ function fmtPct(v: number): string {
   return `${n > 0 ? '+' : '−'}${Math.abs(n)}%`;
 }
 
-/** 天资对应的派生说明（一行以内，装得下才写得下）。 */
-function aptNote(key: (typeof APT_ORDER)[number], s: OuterStats): string {
-  switch (key) {
-    case 'body':
-      return `气血 ${groupNumber(s.maxHp)}`;
-    case 'spirit':
-      return `灵力 ×${s.resourceMul.toFixed(2)} 冷却 ${fmtPct(s.cooldownCut)}`;
-    case 'agility':
-      return `移速 ${fmtPct(s.speedBonus)}`;
-    case 'power':
-      return `伤害 ${fmtPct(s.damageBonus)} 暴击 ${Math.round(s.crit * 100)}%`;
-  }
-}
-
 /** 面板：暗底 + 细边。文字压在花哨的地面上会看不清。 */
 function panel(g: CanvasRenderingContext2D, x: number, y: number, w: number, h: number): void {
   g.fillStyle = 'rgba(11,11,15,0.8)';
@@ -244,51 +240,99 @@ function paintRoll(v: View): void {
   text(g, '← → 换石    J 定下', WIDTH / 2, 174, C.dim);
 }
 
-/** 关外界面：看天资、分修为点。 */
+/**
+ * 关外界面：左边点属性，右边买功法，两个都是悟道点。
+ *
+ * 一屏放不下 12 门功法，所以右边是 6 行的滚动窗口（META_GONGFA_ROWS）。
+ */
+export const META_GONGFA_ROWS = 6;
+
 function paintMeta(v: View): void {
   const g = v.g;
   const save = v.saves[v.metaChar];
-  const lv = outerLevel(save);
   const apt = save.apt ?? NEUTRAL_APT;
-  const stats = outerStats(apt, lv.level);
 
   fillGround(g, v.atlas, groundFrame(0));
-  wash(g, C.void, 0.66);
+  wash(g, C.void, 0.72);
 
-  text(g, CHAR_NAMES[v.metaChar], WIDTH / 2, 16, CHARACTERS[v.metaChar].color);
-  g.fillStyle = C.dim;
+  text(g, CHAR_NAMES[v.metaChar], WIDTH / 2, 14, CHARACTERS[v.metaChar].color);
   g.font = '12px monospace';
   g.textAlign = 'center';
-  g.fillText(`道基 ${lv.level} 重  修为 ${groupNumber(save.xiu)}`, WIDTH / 2, 32);
+  g.fillStyle = C.dim;
+  g.fillText(`道基 ${v.metaLevel} 重   悟道点 ${v.metaPoints}   修为 ${groupNumber(save.xiu)}`, WIDTH / 2, 28);
+  g.fillStyle = C.gray;
+  g.fillText(`体魄 ${apt.body}   灵机 ${apt.spirit}   身法 ${apt.agility}   杀伐 ${apt.power}`, WIDTH / 2, 42);
   g.textAlign = 'left';
 
-  // 天资决定起点，也决定每级涨多快。这一屏只读。
-  panel(g, 24, 40, 272, 84);
-  APT_ORDER.forEach((key, i) => {
-    const y = 58 + i * 19;
-    g.fillStyle = C.light;
+  // 两块暗底：文字压在花哨的地面上会看不清。
+  g.fillStyle = 'rgba(11,11,15,0.78)';
+  g.fillRect(6, 50, 118, 106);
+  g.fillRect(128, 50, 186, 106);
+
+  // ---- 左：属性 ----
+  ATTR_LINES.forEach((line, i) => {
+    const y = 64 + i * 18;
+    const focused = v.metaTab === 'attr' && i === v.metaCursor;
+    if (focused) { g.fillStyle = C.floor; g.fillRect(8, y - 11, 114, 16); }
+
+    const val = save.attrs[line.key] ?? 0;
     g.font = '12px monospace';
     g.textAlign = 'left';
-    g.fillText(APT_NAMES[key].name, 36, y);
+    g.fillStyle = val > 0 ? C.light : C.gray;
+    g.fillText(line.name, 12, y);
 
-    g.fillStyle = C.gold;
-    g.textAlign = 'right';
-    g.fillText(String(apt[key]), 108, y);
-
+    // 五个点：亮一颗就是一级。
+    for (let n = 0; n < line.max; n += 1) {
+      g.fillStyle = n < val ? C.gold : C.stone;
+      g.fillRect(46 + n * 8, y - 6, 5, 4);
+    }
+    g.font = '8px monospace';
     g.fillStyle = C.dim;
+    g.textAlign = 'right';
+    g.fillText(`${val}/${line.max}`, 118, y);
     g.textAlign = 'left';
-    g.fillText(aptNote(key, stats), 122, y);
   });
 
-  const top = outerStats(apt, 30);
-  g.fillStyle = C.gray;
-  g.font = '12px monospace';
-  g.textAlign = 'center';
-  g.fillText(`三十重  气血 ${groupNumber(top.maxHp)}  伤害 ${fmtPct(top.damageBonus)}`, WIDTH / 2, 148);
-  g.fillText(`暴击 ${Math.round(top.crit * 100)}%  移速 ${fmtPct(top.speedBonus)}  冷却 ${fmtPct(top.cooldownCut)}`, WIDTH / 2, 162);
-  g.textAlign = 'left';
+  // ---- 右：功法谱 ----
+  const list = GONGFA[v.metaChar];
+  const top = v.metaTop;
+  for (let row = 0; row < META_GONGFA_ROWS; row += 1) {
+    const idx = top + row;
+    if (idx >= list.length) break;
+    const gf = list[idx]!;
+    const y = 64 + row * 17;
+    const focused = v.metaTab === 'gongfa' && idx === v.metaCursor;
+    const owned = save.learned.includes(gf.id);
 
-  text(g, 'J 出发   U 返回', WIDTH / 2, 176, C.dim, false);
+    if (focused) { g.fillStyle = C.floor; g.fillRect(130, y - 11, 182, 15); }
+
+    g.font = '12px monospace';
+    g.textAlign = 'left';
+    g.fillStyle = owned ? C.dim : gf.kind === 'passive' ? C.ice : C.light;
+    g.fillText(gf.name, 134, y);
+
+    g.textAlign = 'right';
+    if (owned) {
+      g.fillStyle = C.gold;
+      g.fillRect(304, y - 7, 5, 5);
+    } else {
+      g.font = '8px monospace';
+      g.fillStyle = v.metaPoints >= gf.cost ? C.gold : C.gray;
+      g.fillText(String(gf.cost), 310, y);
+    }
+    g.textAlign = 'left';
+  }
+
+  // 选中项的说明。功法谱里这一行决定"买它值不值"。
+  if (v.metaTab === 'gongfa') {
+    const gf = list[v.metaCursor];
+    if (gf) text(g, gf.blurb, WIDTH / 2, 166, C.gray);
+  } else {
+    const line = ATTR_LINES[v.metaCursor];
+    if (line) text(g, `${line.name}：每点 ${Math.round(line.per * 100)}% ${line.blurb}`, WIDTH / 2, 166, C.gray);
+  }
+
+  text(g, '←→ 换栏   ↑↓ 选   J 买   K 出发   U 返回', WIDTH / 2, 177, C.dim, false);
 }
 
 /** 战斗与各种覆盖层。 */
@@ -382,6 +426,14 @@ function paintWorldObjects(v: View): void {
       const bob = Math.sin(w.t * 6 + s.x) * 1.5;
       drawCentered(g, v.atlas, s.fx, s.x, s.y + bob);
     }
+  }
+
+  // 血珠 / 灵珠。bob 相位错开，不然一堆珠子会同步跳动。
+  for (const o of w.orbs) {
+    const frame = o.kind === 'heal' ? 'spr_fx_healLeaf_0' : 'spr_shard_heaven_0';
+    if (!v.atlas.has(frame)) continue;
+    const bob = Math.sin(w.t * 5 + o.x * 0.7) * 2;
+    drawCentered(g, v.atlas, frame, o.x, o.y + bob);
   }
 
   // 飞行弹
@@ -509,6 +561,7 @@ function paintCutscene(v: View): void {
     text(g, v.cutText, WIDTH / 2, 104, C.dim);
   }
   text(g, 'J 继续', WIDTH / 2, 150, C.gray, false);
+  if (v.autoChoiceIn > 0) text(g, `自动继续 ${v.autoChoiceIn.toFixed(1)} 秒`, WIDTH / 2, 164, C.gray, false);
 }
 
 function paintStarter(v: View): void {
@@ -531,12 +584,18 @@ function paintStarter(v: View): void {
   });
 
   text(g, '方向键选择   J 确认', WIDTH / 2, 172, C.dim, false);
+  if (v.autoChoiceIn > 0) {
+    text(g, `自动选功法 ${v.autoChoiceIn.toFixed(1)} 秒`, WIDTH / 2, 158, C.gray, false);
+  }
 }
 
 function paintOffers(v: View): void {
   const g = v.g;
   dim(g);
-  text(g, v.offers.some((o) => o.kind === 'branch') ? '择 路' : '参 悟', WIDTH / 2, 20, C.gold);
+  const title = v.offers.length === 1
+    ? '定 路'
+    : v.offers.some((o) => o.kind === 'branch') ? '择 路' : '参 悟';
+  text(g, title, WIDTH / 2, 20, C.gold);
 
   v.offers.forEach((offer, i) => {
     const y = 32 + i * 46;
@@ -552,6 +611,11 @@ function paintOffers(v: View): void {
     g.fillStyle = C.dim;
     g.fillText(offer.blurb, 40, y + 32);
   });
+
+  // 自动参悟的倒计时。玩家一按方向键，这一行就消失 —— 说明被他接管了。
+  if (v.autoChoiceIn > 0) {
+    text(g, `自动参悟 ${v.autoChoiceIn.toFixed(1)} 秒`, WIDTH / 2, 176, C.gray, false);
+  }
 }
 
 function paintStory(v: View): void {
@@ -580,6 +644,9 @@ function paintEnd(v: View): void {
   text(g, title, WIDTH / 2, 70, color);
   text(g, v.summary, WIDTH / 2, 96, C.dim);
   text(g, v.phase === 'cleared' ? 'J 继续' : 'J 重来', WIDTH / 2, 120, C.gray, false);
+  if (v.phase === 'cleared' && v.autoChoiceIn > 0) {
+    text(g, `自动继续 ${v.autoChoiceIn.toFixed(1)} 秒`, WIDTH / 2, 136, C.gray, false);
+  }
 }
 
 export type { SpellId };

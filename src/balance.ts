@@ -310,6 +310,8 @@ export interface OuterStats {
   speedBonus: number;
   cooldownCut: number;
   killHeal: number;
+  /** 灵力回复倍率（引气被动）。道人专用。 */
+  manaRegenMul: number;
 }
 
 /** 关外某一级的全部属性。资质决定起点，也决定涨得多快。 */
@@ -330,6 +332,7 @@ export function outerStats(apt: Apt, level: number): OuterStats {
     speedBonus: grow(GROWTH.speed, apt.agility),
     cooldownCut: grow(GROWTH.cooldown, apt.spirit),
     killHeal: 0.003 + grow(GROWTH.killHeal, apt.body),
+    manaRegenMul: 1,
   };
 }
 
@@ -456,6 +459,52 @@ export const DODGE = {
 
 /** seconds = 战斗时长；transition 由 shape 决定目标。 */
 export const LEVEL_SECONDS = [90, 100, 120, 120, 120, 130, 140, 150, 180] as const;
+
+// ---------------------------------------------------------------- 自动化
+
+/**
+ * 自动出手 / 自动拾取 / 自动选卡的参数（docs/automation.md）。
+ *
+ * 磁吸半径是这里最危险的一个数：它一大，"必须走位"这条底线就绕过去了。
+ */
+export const AUTO = {
+  /** 两次施法的最小间隔，防止一帧倒空所有槽。 */
+  castGap: 0.12,
+  /** 掉落物开始被吸过来的距离。 */
+  magnetRadius: 76,
+  /** 收下的距离，和玩家碰撞框对齐。 */
+  grabRadius: 12,
+  /** 三选一 / 开局选功法的自动倒计时。 */
+  pickDelay: 2.2,
+  /** 过场与过关屏的自动推进。比选卡长，得留出读字的时间。 */
+  storyDelay: 4.0,
+  /** 自动索敌的距离下限（技能 range 小于它时按它算）。 */
+  minRange: 110,
+  /** 身边多近才自动开护体。 */
+  guardRadius: 70,
+} as const;
+
+// ---------------------------------------------------------------- 掉落
+
+/** 掉落表。杂兵几乎不掉，越往上越稳。 */
+export const DROP = {
+  /** 道行碎片（给技能吃）。 */
+  shard: { mob: 0.4, elite: 0.8, warlord: 1, boss: 1 },
+  /** 血珠。 */
+  heal: { mob: 0.06, elite: 0.25, warlord: 0.6, boss: 1 },
+  /** 灵珠。 */
+  spirit: { mob: 0.08, elite: 0.3, warlord: 0.6, boss: 1 },
+  /** 血珠回多少（气血上限的比例）。 */
+  healRatio: 0.015,
+  /** 灵珠给多少资源（按角色换算）。 */
+  mana: 18,
+  demon: 15,
+  intent: 2,
+  /** Boss 额外必掉的血珠数。 */
+  bossHealOrbs: 3,
+  /** 掉落物的存在时间（秒）。 */
+  life: 20,
+} as const;
 
 // ---------------------------------------------------------------- 帧预算
 

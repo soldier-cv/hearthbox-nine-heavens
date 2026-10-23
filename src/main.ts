@@ -9,12 +9,16 @@ import { defineGame, type GameContext, type GameInstance } from '@hearthbox/sdk'
 import type { Atlas } from './atlas';
 import { Atlas as AtlasCls } from './atlas';
 import { Audio, droneHz } from './audio';
+import { autoCast, autoOfferIndex, autoStarterIndex, magnetPull } from './automation';
 import {
+  AUTO,
   DAO_CLEAR,
   DODGE,
+  DROP,
   INVULN_ON_HIT,
   MANA,
   SHARD_PER_LEVEL,
+  SWORD_INTENT,
   TIER,
   daoFirstClear,
   rollStones,
@@ -28,12 +32,13 @@ import { C, HEIGHT, PLAYER, TERRAIN_PROPS, WIDTH } from './config';
 import type { Enemy } from './entities';
 import { getHp, getMaxHp } from './entities';
 import { keywordSum } from './keywords';
+import { ATTR_LINES, GONGFA, buyAttr, buyGongFa, wudaoPoints } from './outer';
 import type { Offer } from './offers';
 import { daoToNext, makeOffers, starterChoices } from './offers';
 import type { Derived, PlayerState, Slot } from './player';
 import { deriveFromSave, makePlayer, outerLevelOf, refill, slotCap, tickPlayer } from './player';
 import type { View } from './render';
-import { render } from './render';
+import { META_GONGFA_ROWS, render } from './render';
 import { Run } from './run';
 import type { LevelPlan } from './routes';
 import { planFor, validateRoutes } from './routes';
@@ -45,6 +50,7 @@ import type { CharKey, SpellId } from './skills';
 import { BRANCHES, FUSIONS, SPELLS } from './skills';
 import { declareOptions, tuned, type Tuning } from './tuning';
 import { World } from './world';
+import type { Orb } from './world';
 
 export default defineGame({
   id: 'me.nine-heavens',
@@ -86,6 +92,10 @@ export default defineGame({
     let storyChoices: { title: string; blurb: string }[] = [];
     let metaChar: CharKey = 'swordsman';
     let metaCursor = 0;
+    /** 关外界面当前栏：属性 / 功法谱。 */
+    let metaTab: 'attr' | 'gongfa' = 'attr';
+    /** 功法谱的滚动窗口起点。 */
+    let metaTop = 0;
     /** 本局是否用过金手指。用过的局不记成就。 */
     let tainted = false;
     /** 三选一结束后回到哪个阶段。平时回 playing，过关那一刻触发则回 cleared。 */
@@ -106,6 +116,10 @@ export default defineGame({
      * 于是刚进关就自动放了一招 —— 道人第 7 关「打他就输」会当场判负。
      */
     let attackConsumed = false;
+    /** 两次自动出手之间的最小间隔剩余（docs/automation.md）。 */
+    let castGap = 0;
+    /** 自动选卡 / 自动开局的剩余秒数。0 = 这一次交给玩家。 */
+    let autoChoiceT = 0;
 
     const cleared = (): Record<CharKey, number> => clearedByCharFrom(saves);
 
@@ -178,13 +192,21 @@ export default defineGame({
 
       if (char === 'daoist') player.mana = Math.min(player.resMax, player.mana + MANA.killRestore);
 
-      // 碎片：掉给一个还没满级的槽。
+      // 碎片：掉给一个还没满级的槽。越硬的敌人越必掉。
       const slot = player.slots.findIndex((s) => s.level < slotCap(s));
-      if (slot >= 0 && ctx.random.next() < 0.4) {
+      if (slot >= 0 && ctx.random.next() < DROP.shard[e.def.tier]) {
         world.spawnShard({
           x: e.x, y: e.y, vx: 0, vy: -20, slot, life: 10, taken: false,
           fx: 'spr_shard_gold_0',
         });
+      }
+
+      // 血珠 / 灵珠：自动拾取会替玩家收。
+      const tier = e.def.tier;
+      if (ctx.random.next() < DROP.heal[tier]) dropOrb(e.x, e.y, 'heal');
+      if (ctx.random.next() < DROP.spirit[tier]) dropOrb(e.x, e.y, 'spirit');
+      if (tier === 'boss') {
+        for (let i = 0; i < DROP.bossHealOrbs; i += 1) dropOrb(e.x, e.y, 'heal');
       }
 
       world.burst(e.x, e.y, C.gold, 6, 70, 1);
@@ -221,9 +243,12 @@ export default defineGame({
       pickedStarters = [];
       cursor = 0;
       run.to('starter');
+      // 开局选功法也走同一套倒计时：不动手就按顺序替他选。
+      autoChoiceT = tune.autoPick() ? AUTO.pickDelay : 0;
     }
 
     function chooseStarter(index: number): void {
+      autoChoiceT = 0;
       if (pickedStarters.includes(index) || pickedStarters.length >= 2) return;
       pickedStarters.push(index);
       const offer = offers[index];
@@ -270,6 +295,7 @@ export default defineGame({
       shape = makeState(plan);
       enemies = [];
       world.clear();
+      autoChoiceT = 0;
       player.x = WIDTH / 2;
       player.y = HEIGHT / 2;
       cutText = plan.cut;
@@ -281,7 +307,10 @@ export default defineGame({
       // 看过的过场可跳过。
       const seen = saves.char(char).cleared[n - 1];
       if (seen && tune.skipCutscenes()) enterLevel();
-      else run.to('cutscene');
+      else {
+        run.to('cutscene');
+        autoChoiceT = tune.autoPick() ? AUTO.storyDelay : 0;
+      }
     }
 
     function enterLevel(): void {
@@ -292,15 +321,17 @@ export default defineGame({
 
     function openChoice(preferFusion: boolean): void {
       offers = makeOffers(
-        { p: player, char, def: CHARACTERS[char], level: derived.level, ownedKeywords: player.keywords },
+        { p: player, char, def: CHARACTERS[char], level: derived.level, ownedKeywords: player.keywords, learned: saves.char(char).learned },
         () => ctx.random.next(),
         preferFusion,
       );
       cursor = 0;
       run.to('choosing');
+      autoChoiceT = tune.autoPick() ? AUTO.pickDelay : 0;
     }
 
     function applyOffer(offer: Offer): void {
+      autoChoiceT = 0;
       switch (offer.kind) {
         case 'enhance': {
           const slot = player.slots[offer.slotIndex];
@@ -338,6 +369,7 @@ export default defineGame({
       const next = afterChoice;
       afterChoice = 'playing';
       run.to(next);
+      autoChoiceT = next === 'cleared' && tune.autoPick() ? AUTO.storyDelay : 0;
     }
 
     function applyStatOffer(stat: string): void {
@@ -398,6 +430,7 @@ export default defineGame({
       }
 
       run.to(finished ? 'won' : 'cleared');
+      autoChoiceT = !finished && tune.autoPick() ? AUTO.storyDelay : 0;
     }
 
     // ---- 每帧 ----
@@ -415,8 +448,12 @@ export default defineGame({
         if (player.dodgeCd <= 0 && pressedDodge()) dodge();
         if (!attackConsumed && pressedAttack()) {
           const ready = player.slots.find((s) => s.cd <= 0);
-          if (ready) cast(c, ready);
+          if (ready && cast(c, ready)) castGap = AUTO.castGap;
         }
+
+        // 自动出手：冷却好了就打最近的。J 仍然可以补一发。
+        castGap = Math.max(0, castGap - dt);
+        if (tune.autoCast() && autoCast(c, tune, castGap)) castGap = AUTO.castGap;
 
         updateEnemies(c, dt);
         updateBolts(c, dt);
@@ -430,7 +467,9 @@ export default defineGame({
           }
         }
 
-        absorbShards();
+        // 掉落物：先磁吸，再按距离收下。
+        if (tune.autoPickup()) magnetPull(player, world);
+        absorbPickups();
         world.update(dt);
 
         const outcome = SHAPES[plan.shape].step(shape, c, dt);
@@ -474,10 +513,10 @@ export default defineGame({
       if (tune.soundOn()) audio.play('dash');
     }
 
-    function absorbShards(): void {
+    function absorbPickups(): void {
       for (let i = world.shards.length - 1; i >= 0; i -= 1) {
         const s = world.shards[i]!;
-        if (Math.hypot(player.x - s.x, player.y - s.y) > 14) continue;
+        if (Math.hypot(player.x - s.x, player.y - s.y) > AUTO.grabRadius) continue;
         world.shards.splice(i, 1);
         const slot = player.slots[s.slot];
         if (!slot || slot.level >= slotCap(slot)) continue;
@@ -488,6 +527,44 @@ export default defineGame({
           if (tune.soundOn()) audio.play('levelup');
         }
       }
+
+      for (let i = world.orbs.length - 1; i >= 0; i -= 1) {
+        const o = world.orbs[i]!;
+        if (Math.hypot(player.x - o.x, player.y - o.y) > AUTO.grabRadius) continue;
+        world.orbs.splice(i, 1);
+        takeOrb(o);
+      }
+    }
+
+    /** 血珠与灵珠。灵珠按角色换算成这一角色的资源。 */
+    function takeOrb(o: Orb): void {
+      if (o.kind === 'heal') {
+        const heal = Math.round(player.maxHp * DROP.healRatio);
+        player.hp = Math.min(player.maxHp, player.hp + heal);
+        world.floater(o.x, o.y - 4, heal, false, true);
+        return;
+      }
+
+      if (char === 'daoist') {
+        player.mana = Math.min(player.resMax, player.mana + DROP.mana);
+      } else if (char === 'demon') {
+        if (player.burst <= 0) player.demon = Math.max(0, player.demon - DROP.demon);
+      } else {
+        player.intent = Math.min(SWORD_INTENT.maxStacks, player.intent + DROP.intent);
+      }
+      world.burst(o.x, o.y, C.heaven, 5, 50, 1);
+    }
+
+    /** 掉一件东西。初速随机，散开一点，别全叠在尸体上。 */
+    function dropOrb(x: number, y: number, kind: Orb['kind']): void {
+      world.spawnOrb({
+        x,
+        y,
+        vx: (ctx.random.next() - 0.5) * 60,
+        vy: (ctx.random.next() - 0.5) * 60 - 20,
+        life: DROP.life,
+        kind,
+      });
     }
 
     // ---- 输入 ----
@@ -537,6 +614,8 @@ export default defineGame({
           if (!isUnlocked(key, cleared()).ok) return;
           metaChar = key;
           metaCursor = 0;
+          metaTab = 'attr';
+          metaTop = 0;
           // 新角色先掷天资，老角色直接进关外。
           if (saves.char(key).apt) {
             run.to('meta');
@@ -572,14 +651,44 @@ export default defineGame({
       }
 
       if (run.phase === 'meta') {
-        if (menuAttack()) beginRun(metaChar);
-        if (pressedBack()) { cursor = CHAR_ORDER.indexOf(metaChar); run.to('select'); }
+        const save = saves.char(metaChar);
+        const listLen = metaTab === 'attr' ? ATTR_LINES.length : GONGFA[metaChar].length;
+
+        if (pressedBack()) { cursor = CHAR_ORDER.indexOf(metaChar); run.to('select'); return; }
+        // K / 手柄 A = 出发。J 留给"买"，两个动作不能挤在一个键上。
+        if (pressedConfirm()) { beginRun(metaChar); return; }
+
+        if (pressedLeft() || pressedRight()) {
+          metaTab = metaTab === 'attr' ? 'gongfa' : 'attr';
+          metaCursor = 0;
+          metaTop = 0;
+        }
+        if (pressedUp()) metaCursor = (metaCursor + listLen - 1) % listLen;
+        if (pressedDown()) metaCursor = (metaCursor + 1) % listLen;
+
+        if (metaTab === 'gongfa') {
+          const rows = META_GONGFA_ROWS;
+          if (metaCursor < metaTop) metaTop = metaCursor;
+          if (metaCursor >= metaTop + rows) metaTop = metaCursor - rows + 1;
+        } else {
+          metaTop = 0;
+        }
+
+        if (menuAttack()) {
+          const ok = metaTab === 'attr'
+            ? buyAttr(save, ATTR_LINES[metaCursor]!.key)
+            : buyGongFa(save, GONGFA[metaChar][metaCursor]!.id, metaChar);
+          if (ok) {
+            saves.writeChar(metaChar, save);
+            if (tune.soundOn()) audio.play('ui');
+          }
+        }
         return;
       }
 
       if (run.phase === 'starter') {
-        if (pressedUp()) cursor = (cursor + offers.length - 1) % offers.length;
-        if (pressedDown()) cursor = (cursor + 1) % offers.length;
+        if (pressedUp()) { autoChoiceT = 0; cursor = (cursor + offers.length - 1) % offers.length; }
+        if (pressedDown()) { autoChoiceT = 0; cursor = (cursor + 1) % offers.length; }
         if (menuAttack()) chooseStarter(cursor);
         return;
       }
@@ -590,8 +699,8 @@ export default defineGame({
       }
 
       if (run.phase === 'choosing') {
-        if (pressedUp()) cursor = (cursor + offers.length - 1) % Math.max(1, offers.length);
-        if (pressedDown()) cursor = (cursor + 1) % Math.max(1, offers.length);
+        if (pressedUp()) { autoChoiceT = 0; cursor = (cursor + offers.length - 1) % Math.max(1, offers.length); }
+        if (pressedDown()) { autoChoiceT = 0; cursor = (cursor + 1) % Math.max(1, offers.length); }
         if (menuAttack()) {
           const offer = offers[cursor];
           if (offer) applyOffer(offer);
@@ -623,10 +732,52 @@ export default defineGame({
       if (run.phase === 'dead' || run.phase === 'won') {
         if (menuAttack()) {
           cursor = 0;
+          autoChoiceT = 0;
           run.reset();
           audio.stopDrone();
         }
       }
+    }
+
+    /**
+     * 自动选卡 / 自动开局的倒计时。
+     *
+     * 只在这两个界面里跑：别的阶段留着计时没有意义，还会在回来时突然触发。
+     */
+    function tickAuto(dt: number): void {
+      if (autoChoiceT <= 0) return;
+      const phase = run.phase;
+
+      // 过场与过关屏：只是"替你按一下继续"，不替你选。
+      if (phase === 'cutscene' || phase === 'cleared') {
+        autoChoiceT -= dt;
+        if (autoChoiceT > 0) return;
+        autoChoiceT = 0;
+        if (phase === 'cutscene') enterLevel();
+        else startLevel(run.level + 1);
+        return;
+      }
+
+      if (phase !== 'choosing' && phase !== 'starter') {
+        autoChoiceT = 0;
+        return;
+      }
+
+      autoChoiceT -= dt;
+      if (autoChoiceT > 0) return;
+
+      if (phase === 'choosing') {
+        autoChoiceT = 0;
+        const offer = offers[autoOfferIndex(offers)];
+        if (offer) applyOffer(offer);
+        return;
+      }
+
+      // 开局要选两门：一次倒计时选一门，选完再给下一次。
+      const i = autoStarterIndex(offers, pickedStarters);
+      autoChoiceT = 0;
+      if (i >= 0) chooseStarter(i);
+      if (run.phase === 'starter' && tune.autoPick()) autoChoiceT = AUTO.pickDelay;
     }
 
     function view(): View {
@@ -655,8 +806,13 @@ export default defineGame({
         storyChoices,
         metaChar,
         metaCursor,
+        metaTab,
+        metaTop,
+        metaPoints: wudaoPoints(saves.char(metaChar)),
+        metaLevel: outerLevel(saves.char(metaChar)).level,
         stones,
         stonePick,
+        autoChoiceIn: autoChoiceT,
       };
     }
 
@@ -699,10 +855,20 @@ export default defineGame({
         /** 按存档天资算出来的气血，用来对账。 */
         expectHp: save.apt ? Math.round((save.apt.body * 80) / 100) * 100 : null,
         metaChar,
+        metaCursor,
+        metaTab,
+        metaTop,
+        metaPoints: wudaoPoints(saves.char(metaChar)),
+        learned: saves.char(char).learned.slice(),
+        attrs: { ...saves.char(char).attrs },
         debugBegin,
         outerLevel: outerLevelOf(save),
         cleared: save.cleared.slice(),
         summary,
+        autoChoiceIn: Math.round(autoChoiceT * 100) / 100,
+        castGap: Math.round(castGap * 100) / 100,
+        orbs: world.orbs.length,
+        shards: world.shards.length,
       };
     }
 
@@ -719,6 +885,23 @@ export default defineGame({
         saves.writeChar(key, save);
         derived = deriveFromSave(saves.char(char));
         return save.xiu;
+      };
+
+      // 验收用：直接追加一门已买功法（不经过关外界面）。
+      debugHook.__nineHeavensLearn = (id: string, key: CharKey = char) => {
+        const s = saves.char(key);
+        if (!s.learned.includes(id)) s.learned.push(id);
+        saves.writeChar(key, s);
+        return s.learned.slice();
+      };
+
+      // 验收用：直接把技能灌到某个等级并弹一次三选一，检查卡池过滤。
+      debugHook.__nineHeavensOffer = (slotLevel = 0) => {
+        if (slotLevel > 0) {
+          for (const s of player.slots) s.level = Math.min(slotCap(s), slotLevel);
+        }
+        openChoice(false);
+        return offers.map((o) => `${o.kind}:${o.title}`);
       };
 
       // 验收用的跳关钩子：逐个形状截图，不必真打 27 关。
@@ -743,6 +926,7 @@ export default defineGame({
     return {
       update(dt: number) {
         attackConsumed = false;
+        tickAuto(dt);
         handleMenus();
         update(dt);
         publishDebug();

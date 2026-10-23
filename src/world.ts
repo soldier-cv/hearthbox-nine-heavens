@@ -23,6 +23,19 @@ export interface Shard {
   fx: string;
 }
 
+/**
+ * 血珠 / 灵珠。和碎片一样会磁吸，但拾取后立刻结算，不进技能。
+ * 分开一个数组，是因为渲染和"满级碎片直接消失"的规则不一样。
+ */
+export interface Orb {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  life: number;
+  kind: 'heal' | 'spirit';
+}
+
 /** 玩家发出的飞行弹。 */
 export interface Bolt {
   x: number;
@@ -110,6 +123,7 @@ export interface Particle {
 
 export class World {
   shards: Shard[] = [];
+  orbs: Orb[] = [];
   bolts: Bolt[] = [];
   telegraphs: Telegraph[] = [];
   fields: Field[] = [];
@@ -130,6 +144,7 @@ export class World {
 
   clear(): void {
     this.shards.length = 0;
+    this.orbs.length = 0;
     this.bolts.length = 0;
     this.telegraphs.length = 0;
     this.fields.length = 0;
@@ -153,6 +168,11 @@ export class World {
 
   spawnShard(s: Shard): void {
     this.shards.push(s);
+  }
+
+  spawnOrb(o: Orb): void {
+    if (this.orbs.length >= 40) this.orbs.shift();
+    this.orbs.push(o);
   }
 
   spawnBolt(b: Bolt): void {
@@ -218,6 +238,16 @@ export class World {
       s.vx *= 0.9;
       s.vy *= 0.9;
       if (s.life <= 0) this.shards.splice(i, 1);
+    }
+
+    for (let i = this.orbs.length - 1; i >= 0; i -= 1) {
+      const o = this.orbs[i]!;
+      o.life -= dt;
+      o.x += o.vx * dt;
+      o.y += o.vy * dt;
+      o.vx *= 0.9;
+      o.vy *= 0.9;
+      if (o.life <= 0) this.orbs.splice(i, 1);
     }
 
     for (let i = this.bolts.length - 1; i >= 0; i -= 1) {
