@@ -574,10 +574,37 @@ export default defineGame({
 
     run.reset();
 
+    // 调试快照：只在 ?debug=1 时挂到 window 上，验收脚本靠它读阶段和存档。
+    // 正常游玩时这段完全不执行，游戏逻辑也不依赖它。
+    const debugHook = ctx.debug.enabled
+      ? (window as unknown as Record<string, unknown>)
+      : null;
+
+    function publishDebug(): void {
+      if (!debugHook) return;
+      const save = saves.char(char);
+      debugHook.__nineHeavens = {
+        phase: run.phase,
+        level: run.level,
+        char,
+        dao: Math.round(player.dao),
+        hp: Math.round(player.hp),
+        maxHp: player.maxHp,
+        kills: run.kills,
+        slots: player.slots.length,
+        xiu: save.xiu,
+        outerLevel: outerLevelOf(save),
+        cleared: save.cleared.slice(),
+        points: { ...save.points },
+        summary,
+      };
+    }
+
     return {
       update(dt: number) {
         handleMenus();
         update(dt);
+        publishDebug();
       },
       render() {
         render(view());
