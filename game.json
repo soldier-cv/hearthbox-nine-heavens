@@ -1,7 +1,7 @@
 {
   "id": "me.nine-heavens",
   "name": "九霄",
-  "summary": "像素修仙 Roguelike：收集碎片，把掌心雷进化成九霄天雷。",
+  "summary": "像素修仙 Roguelike：三个修士，一座被灭门的山，九关往上走。",
   "version": "0.1.0",
   "sdk": "^0.1.0",
   "entry": "game.js",

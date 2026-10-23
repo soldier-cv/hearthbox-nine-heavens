@@ -1,396 +1,484 @@
 /**
- * 技能系统：基础法术、进阶分支、融合。
+ * 技能数据：三个角色各三个初始技能，每个两条进阶分支，角色内三条融合。
  *
- * 数据与逻辑分开：这里只有**数据**（定义、表），没有行为。
- * 行为在 `combat.ts`。这样改数值不改逻辑，且能被测试直接查表。
+ * 只有数据，没有行为。行为在 combat.ts。
  *
- * 设计文档见 docs/skills.md。
+ * 一条硬规则（docs/skills.md）：**融合的两个前置必须来自不同的基础技能。**
+ * 因为每个基础技能只能选一条分支，同一技能的两条分支不可能同时在手。
+ * 这条规则由 availableFusions 强制实现，写错会在数据校验时被发现。
  */
 
-/** 六系属性。金与火共用主色，但属性和克制不同。 */
-export type Element = 'thunder' | 'fire' | 'ice' | 'wood' | 'metal' | 'wind';
+export type CharKey = 'swordsman' | 'daoist' | 'demon';
 
-export const ELEMENT_NAMES: Record<Element, string> = {
-  thunder: '雷',
-  fire: '火',
-  ice: '冰',
-  wood: '木',
-  metal: '金',
-  wind: '风',
+export type Element = 'thunder' | 'fire' | 'ice' | 'wood' | 'metal' | 'wind' | 'blood';
+
+/** 元素 -> 图集里的碎片帧名（色板按 art.md）。 */
+export const ELEMENT_COLOR: Record<Element, string> = {
+  thunder: '#60a5fa',
+  fire: '#ff6b35',
+  ice: '#2dd4bf',
+  wood: '#4ade80',
+  metal: '#f5a524',
+  wind: '#9a9ab0',
+  blood: '#f472b6',
 };
 
-/** 基础法术 id。 */
-export type SpellId = 'palm-thunder' | 'fire-seal' | 'ice-art' | 'wood-art' | 'gold-body' | 'wind-art';
+/** 基础技能 id。发布后不可改，改了玩家的金手指设置会失效。 */
+export type SpellId =
+  // 剑客
+  | 'qingfeng'
+  | 'huifeng'
+  | 'shouyuan'
+  // 道人
+  | 'qizhi'
+  | 'yinlei'
+  | 'qingshen'
+  // 魔头
+  | 'xuezhou'
+  | 'shihun'
+  | 'moying';
 
-/** 进阶分支 id。每个基础法术两条。 */
 export type BranchId =
-  | 'five-thunders'
-  | 'swift-lightning'
-  | 'burn-mountain'
-  | 'undying-flame'
-  | 'frost-lock'
-  | 'ice-shards'
-  | 'ten-thousand-binds'
-  | 'spring-vine'
-  | 'immovable'
-  | 'vajra-break'
-  | 'wind-step'
-  | 'whirlwind';
+  | 'duanyue'
+  | 'zhuifeng'
+  | 'gangfeng'
+  | 'xueren'
+  | 'jingang'
+  | 'chana'
+  | 'guanri'
+  | 'lianzhu'
+  | 'wulei'
+  | 'jiuyou'
+  | 'yufeng'
+  | 'suodi'
+  | 'wandu'
+  | 'xuebao'
+  | 'xixue'
+  | 'duoshe'
+  | 'yingfen'
+  | 'moyu';
 
-/** 融合法术 id。 */
 export type FusionId =
-  | 'nine-heavens'
-  | 'frost-thunder'
-  | 'green-lotus'
-  | 'immovable-thunder'
-  | 'fire-ice-prison'
-  | 'withered-spring'
-  | 'wind-thunder'
-  | 'vajra-glare';
+  | 'wanjian'
+  | 'xuese'
+  | 'wuwo'
+  | 'jiuxiao-lei'
+  | 'tianshuang'
+  | 'fenglei'
+  | 'xuehai'
+  | 'busi'
+  | 'morana';
+
+/**
+ * 技能的"形态"决定 combat 怎么执行它。
+ * 这样加新技能不用改逻辑，只改表。
+ */
+export type Shape =
+  | 'stab' // 单体直刺
+  | 'fan' // 身前扇形
+  | 'guard' // 格挡
+  | 'bolt' // 远程弹
+  | 'strike' // 指定位置落雷
+  | 'dash' // 位移 + 领域
+  | 'dot' // 持续伤害
+  | 'aura' // 光环（减速/掉血）
+  | 'multi' // 多发
+  | 'pierce' // 穿透一线
+  | 'field' // 地面领域
+  | 'summon'; // 残影 / 召唤
 
 export interface SpellDef {
   id: SpellId;
+  char: CharKey;
   name: string;
   element: Element;
-  /** 一级基础伤害。强化类为 0。 */
-  damage: number;
-  /** 一级基础冷却，秒。 */
+  /** 伤害 = 一击 × 这个倍数。0 表示纯辅助。 */
+  mult: number;
+  /** 基础冷却（秒）。 */
   cooldown: number;
-  /** 射程或作用半径，逻辑像素。 */
+  /** 作用半径 / 射程，逻辑像素。 */
   range: number;
-  /** 一句话说明，卡牌上显示。 */
+  shape: Shape;
+  /** 代价。三个字段按角色语义：hp = 占最大气血比例，mana = 灵力点，demon = 魔气点。 */
+  cost: { hp?: number; mana?: number; demon?: number };
   blurb: string;
-  /** 两条进阶分支。 */
   branches: [BranchId, BranchId];
+  /** 图集里的特效帧名。 */
+  fx: string;
 }
 
 export interface BranchDef {
   id: BranchId;
-  name: string;
-  /** 属于哪个基础法术。 */
   from: SpellId;
+  name: string;
   element: Element;
-  damage: number;
+  mult: number;
   cooldown: number;
   range: number;
+  shape: Shape;
+  cost: { hp?: number; mana?: number; demon?: number };
   blurb: string;
+  fx: string;
 }
 
 export interface FusionDef {
   id: FusionId;
+  char: CharKey;
   name: string;
-  /** 需要的两个进阶分支。 */
+  /** 两个前置，必须来自不同 from。 */
   needs: [BranchId, BranchId];
   element: Element;
-  damage: number;
+  mult: number;
   cooldown: number;
+  range: number;
+  shape: Shape;
+  cost: { hp?: number; mana?: number; demon?: number };
   blurb: string;
+  fx: string;
 }
 
-/** 六个基础法术。一局最多带三个。 */
 export const SPELLS: Record<SpellId, SpellDef> = {
-  'palm-thunder': {
-    id: 'palm-thunder',
-    name: '掌心雷',
-    element: 'thunder',
-    damage: 14,
-    cooldown: 0.75,
-    range: 120,
-    blurb: '中距离单体，起手技。',
-    branches: ['five-thunders', 'swift-lightning'],
+  // ------------------------------------------------------------ 剑客
+  qingfeng: {
+    id: 'qingfeng',
+    char: 'swordsman',
+    name: '青锋式',
+    element: 'metal',
+    mult: 1.0,
+    cooldown: 0.8,
+    range: 20,
+    shape: 'stab',
+    cost: { hp: 0.002 },
+    blurb: '近身直刺，命中叠剑意。',
+    branches: ['duanyue', 'zhuifeng'],
+    fx: 'spr_fx_slashStraight_0',
   },
-  'fire-seal': {
-    id: 'fire-seal',
-    name: '焚天印',
-    element: 'fire',
-    damage: 10,
+  huifeng: {
+    id: 'huifeng',
+    char: 'swordsman',
+    name: '回风斩',
+    element: 'wind',
+    mult: 0.8,
+    cooldown: 1.0,
+    range: 26,
+    shape: 'fan',
+    cost: { hp: 0.0035 },
+    blurb: '身前扇形，多目标各叠一层。',
+    branches: ['gangfeng', 'xueren'],
+    fx: 'spr_fx_slashFan_0',
+  },
+  shouyuan: {
+    id: 'shouyuan',
+    char: 'swordsman',
+    name: '守元式',
+    element: 'metal',
+    mult: 0,
+    cooldown: 5,
+    range: 0,
+    shape: 'guard',
+    cost: { hp: 0.004 },
+    blurb: '格挡 1 秒，减伤七成。',
+    branches: ['jingang', 'chana'],
+    fx: 'spr_fx_guardRing_0',
+  },
+
+  // ------------------------------------------------------------ 道人
+  qizhi: {
+    id: 'qizhi',
+    char: 'daoist',
+    name: '气指',
+    element: 'thunder',
+    mult: 1.2,
+    cooldown: 0.8,
+    range: 110,
+    shape: 'bolt',
+    cost: { mana: 8 },
+    blurb: '远程单体。',
+    branches: ['guanri', 'lianzhu'],
+    fx: 'spr_fx_qiFinger_0',
+  },
+  yinlei: {
+    id: 'yinlei',
+    char: 'daoist',
+    name: '引雷符',
+    element: 'thunder',
+    mult: 3.0,
+    cooldown: 2.5,
+    range: 90,
+    shape: 'strike',
+    cost: { mana: 20 },
+    blurb: '指定位置落雷。',
+    branches: ['wulei', 'jiuyou'],
+    fx: 'spr_fx_talisman_0',
+  },
+  qingshen: {
+    id: 'qingshen',
+    char: 'daoist',
+    name: '轻身诀',
+    element: 'wind',
+    mult: 0,
+    cooldown: 6,
+    range: 0,
+    shape: 'dash',
+    cost: { mana: 12 },
+    blurb: '1.5 秒内移速 +60%。',
+    branches: ['yufeng', 'suodi'],
+    fx: 'spr_fx_afterimage_0',
+  },
+
+  // ------------------------------------------------------------ 魔头
+  xuezhou: {
+    id: 'xuezhou',
+    char: 'demon',
+    name: '血咒',
+    element: 'blood',
+    mult: 0.5,
     cooldown: 1.2,
-    range: 30,
-    blurb: '近身范围，附带灼烧。',
-    branches: ['burn-mountain', 'undying-flame'],
+    range: 34,
+    shape: 'dot',
+    cost: { hp: 0.004, demon: 10 },
+    blurb: '持续伤害，每秒 0.35 击，5 秒。',
+    branches: ['wandu', 'xuebao'],
+    fx: 'spr_fx_bloodCurse_0',
   },
-  'ice-art': {
-    id: 'ice-art',
-    name: '玄冰诀',
-    element: 'ice',
-    damage: 7,
-    cooldown: 1.0,
-    range: 100,
-    blurb: '减速控制，伤害不高。',
-    branches: ['frost-lock', 'ice-shards'],
-  },
-  'wood-art': {
-    id: 'wood-art',
-    name: '青木诀',
-    element: 'wood',
-    damage: 5,
-    cooldown: 1.5,
-    range: 90,
-    blurb: '召唤藤蔓，限制走位。',
-    branches: ['ten-thousand-binds', 'spring-vine'],
-  },
-  'gold-body': {
-    id: 'gold-body',
-    name: '金身诀',
-    element: 'metal',
-    damage: 0,
+  shihun: {
+    id: 'shihun',
+    char: 'demon',
+    name: '噬魂',
+    element: 'blood',
+    mult: 0,
     cooldown: 0,
     range: 0,
-    blurb: '护体减伤，没有伤害。',
-    branches: ['immovable', 'vajra-break'],
+    shape: 'aura',
+    cost: {},
+    blurb: '被动：击杀回气血。',
+    branches: ['xixue', 'duoshe'],
+    fx: 'spr_fx_bloodCurse_0',
   },
-  'wind-art': {
-    id: 'wind-art',
-    name: '御风术',
-    element: 'wind',
-    damage: 0,
-    cooldown: 6,
-    range: 0,
-    blurb: '短暂加速，用于脱身。',
-    branches: ['wind-step', 'whirlwind'],
-  },
-};
-
-/** 十二个进阶分支。 */
-export const BRANCHES: Record<BranchId, BranchDef> = {
-  'five-thunders': {
-    id: 'five-thunders',
-    name: '五雷正法',
-    from: 'palm-thunder',
-    element: 'thunder',
-    damage: 22,
-    cooldown: 1.6,
-    range: 55,
-    blurb: '范围雷击，命中一片。',
-  },
-  'swift-lightning': {
-    id: 'swift-lightning',
-    name: '疾电诀',
-    from: 'palm-thunder',
-    element: 'thunder',
-    damage: 9,
-    cooldown: 0.35,
-    range: 100,
-    blurb: '高频单体，可连锁两次。',
-  },
-  'burn-mountain': {
-    id: 'burn-mountain',
-    name: '焚山煮海',
-    from: 'fire-seal',
-    element: 'fire',
-    damage: 20,
-    cooldown: 2.0,
-    range: 70,
-    blurb: '大范围爆炸，灼烧更久。',
-  },
-  'undying-flame': {
-    id: 'undying-flame',
-    name: '不灭心火',
-    from: 'fire-seal',
-    element: 'fire',
-    damage: 8,
-    cooldown: 0.9,
-    range: 30,
-    blurb: '灼烧不会消失，可叠三层。',
-  },
-  'frost-lock': {
-    id: 'frost-lock',
-    name: '万里冰封',
-    from: 'ice-art',
+  moying: {
+    id: 'moying',
+    char: 'demon',
+    name: '魔影',
     element: 'ice',
-    damage: 6,
-    cooldown: 2.2,
+    mult: 0.6,
+    cooldown: 3,
     range: 60,
-    blurb: '范围冻结，敌人短时间不能动。',
-  },
-  'ice-shards': {
-    id: 'ice-shards',
-    name: '千刃冰棱',
-    from: 'ice-art',
-    element: 'ice',
-    damage: 12,
-    cooldown: 0.9,
-    range: 100,
-    blurb: '命中后碎片向三个方向溅射。',
-  },
-  'ten-thousand-binds': {
-    id: 'ten-thousand-binds',
-    name: '万木缚',
-    from: 'wood-art',
-    element: 'wood',
-    damage: 4,
-    cooldown: 2.0,
-    range: 70,
-    blurb: '大范围定身。',
-  },
-  'spring-vine': {
-    id: 'spring-vine',
-    name: '回春藤',
-    from: 'wood-art',
-    element: 'wood',
-    damage: 3,
-    cooldown: 2.5,
-    range: 90,
-    blurb: '持续回血。',
-  },
-  immovable: {
-    id: 'immovable',
-    name: '不动明王',
-    from: 'gold-body',
-    element: 'metal',
-    damage: 0,
-    cooldown: 0,
-    range: 0,
-    blurb: '减伤 35%，站定后更强。',
-  },
-  'vajra-break': {
-    id: 'vajra-break',
-    name: '金刚破',
-    from: 'gold-body',
-    element: 'metal',
-    damage: 0,
-    cooldown: 0,
-    range: 0,
-    blurb: '受击时反弹六成伤害。',
-  },
-  'wind-step': {
-    id: 'wind-step',
-    name: '踏风而行',
-    from: 'wind-art',
-    element: 'wind',
-    damage: 0,
-    cooldown: 8,
-    range: 0,
-    blurb: '大幅加速，持续五秒。',
-  },
-  whirlwind: {
-    id: 'whirlwind',
-    name: '风卷残云',
-    from: 'wind-art',
-    element: 'wind',
-    damage: 0,
-    cooldown: 6,
-    range: 50,
-    blurb: '把周围敌人吸向你。',
+    shape: 'dash',
+    cost: { hp: 0.008, demon: 15 },
+    blurb: '突进 60 像素，留下减速领域。',
+    branches: ['yingfen', 'moyu'],
+    fx: 'spr_fx_domain_0',
   },
 };
 
-/** 八个融合法术。 */
+export const BRANCHES: Record<BranchId, BranchDef> = {
+  // 剑客
+  duanyue: {
+    id: 'duanyue', from: 'qingfeng', name: '断岳式', element: 'metal',
+    mult: 3.0, cooldown: 1.6, range: 22, shape: 'stab', cost: { hp: 0.008 },
+    blurb: '蓄力重击，三倍伤害。', fx: 'spr_fx_slashStraight_0',
+  },
+  zhuifeng: {
+    id: 'zhuifeng', from: 'qingfeng', name: '追风剑', element: 'wind',
+    mult: 0.6, cooldown: 0.5, range: 20, shape: 'multi', cost: { hp: 0.002 },
+    blurb: '三段连击，每段 0.6 倍。', fx: 'spr_fx_slashStraight_0',
+  },
+  gangfeng: {
+    id: 'gangfeng', from: 'huifeng', name: '罡风诀', element: 'wind',
+    mult: 0.9, cooldown: 1.3, range: 40, shape: 'fan', cost: { hp: 0.005 },
+    blurb: '范围翻倍，带击退。', fx: 'spr_fx_slashFan_0',
+  },
+  xueren: {
+    id: 'xueren', from: 'huifeng', name: '血刃', element: 'blood',
+    mult: 1.0, cooldown: 1.1, range: 28, shape: 'fan', cost: { hp: 0.003 },
+    blurb: '伤害随损失气血提升，最多 +80%。', fx: 'spr_fx_slashFan_0',
+  },
+  jingang: {
+    id: 'jingang', from: 'shouyuan', name: '金刚身', element: 'metal',
+    mult: 0, cooldown: 6, range: 0, shape: 'guard', cost: { hp: 0.004 },
+    blurb: '格挡成功反弹四成。', fx: 'spr_fx_guardRing_0',
+  },
+  chana: {
+    id: 'chana', from: 'shouyuan', name: '刹那', element: 'ice',
+    mult: 0.8, cooldown: 4, range: 30, shape: 'dash', cost: { hp: 0.005 },
+    blurb: '格挡瞬间闪到敌人背后。', fx: 'spr_fx_afterimage_0',
+  },
+
+  // 道人
+  guanri: {
+    id: 'guanri', from: 'qizhi', name: '贯日指', element: 'thunder',
+    mult: 2.6, cooldown: 1.4, range: 130, shape: 'pierce', cost: { mana: 16 },
+    blurb: '穿透一条线。', fx: 'spr_fx_qiFinger_0',
+  },
+  lianzhu: {
+    id: 'lianzhu', from: 'qizhi', name: '连珠指', element: 'thunder',
+    mult: 0.55, cooldown: 1.1, range: 100, shape: 'multi', cost: { mana: 14 },
+    blurb: '一次三发。', fx: 'spr_fx_qiFinger_0',
+  },
+  wulei: {
+    id: 'wulei', from: 'yinlei', name: '五雷正法', element: 'thunder',
+    mult: 2.2, cooldown: 2.2, range: 54, shape: 'field', cost: { mana: 22 },
+    blurb: '范围雷击。', fx: 'spr_fx_lightning12_0',
+  },
+  jiuyou: {
+    id: 'jiuyou', from: 'yinlei', name: '九幽雷', element: 'ice',
+    mult: 5.5, cooldown: 4.0, range: 80, shape: 'strike', cost: { mana: 30 },
+    blurb: '延迟 1 秒，高伤。', fx: 'spr_fx_lightning24_0',
+  },
+  yufeng: {
+    id: 'yufeng', from: 'qingshen', name: '御风', element: 'wind',
+    mult: 0, cooldown: 8, range: 0, shape: 'dash', cost: { mana: 14 },
+    blurb: '5 秒加速且可穿怪。', fx: 'spr_fx_afterimage_0',
+  },
+  suodi: {
+    id: 'suodi', from: 'qingshen', name: '缩地成寸', element: 'wind',
+    mult: 0, cooldown: 5, range: 80, shape: 'dash', cost: { mana: 18 },
+    blurb: '瞬移 80 像素。', fx: 'spr_fx_afterimage_0',
+  },
+
+  // 魔头
+  wandu: {
+    id: 'wandu', from: 'xuezhou', name: '万毒噬心', element: 'wood',
+    mult: 0.35, cooldown: 1.4, range: 34, shape: 'dot', cost: { hp: 0.004, demon: 8 },
+    blurb: '可叠 5 层，独立结算。', fx: 'spr_fx_bloodCurse_0',
+  },
+  xuebao: {
+    id: 'xuebao', from: 'xuezhou', name: '血爆', element: 'blood',
+    mult: 0.5, cooldown: 2.0, range: 40, shape: 'field', cost: { hp: 0.006, demon: 12 },
+    blurb: '引爆所有层，每层 0.5 击。', fx: 'spr_fx_domain_0',
+  },
+  xixue: {
+    id: 'xixue', from: 'shihun', name: '吸血魔功', element: 'blood',
+    mult: 0, cooldown: 0, range: 0, shape: 'aura', cost: {},
+    blurb: '攻击回 15% 伤害为气血。', fx: 'spr_fx_bloodCurse_0',
+  },
+  duoshe: {
+    id: 'duoshe', from: 'shihun', name: '夺舍', element: 'ice',
+    mult: 0, cooldown: 0, range: 0, shape: 'aura', cost: {},
+    blurb: '击杀精英永久 +5% 气血上限。', fx: 'spr_fx_bloodCurse_0',
+  },
+  yingfen: {
+    id: 'yingfen', from: 'moying', name: '影分身', element: 'ice',
+    mult: 0.4, cooldown: 5, range: 60, shape: 'summon', cost: { hp: 0.006, demon: 14 },
+    blurb: '留下会攻击的残影。', fx: 'spr_fx_afterimage_0',
+  },
+  moyu: {
+    id: 'moyu', from: 'moying', name: '魔域', element: 'blood',
+    mult: 0.3, cooldown: 6, range: 48, shape: 'field', cost: { hp: 0.008, demon: 18 },
+    blurb: '范围内敌人掉血，自身回血。', fx: 'spr_fx_domain_0',
+  },
+};
+
 export const FUSIONS: Record<FusionId, FusionDef> = {
-  'nine-heavens': {
-    id: 'nine-heavens',
-    name: '九霄天雷',
-    needs: ['five-thunders', 'burn-mountain'],
-    element: 'thunder',
-    damage: 45,
-    cooldown: 3.5,
-    blurb: '全场落雷，带灼烧。',
+  // 剑客（前置全部来自不同基础技能）
+  wanjian: {
+    id: 'wanjian', char: 'swordsman', name: '万剑归宗',
+    needs: ['duanyue', 'gangfeng'], element: 'metal',
+    mult: 4.0, cooldown: 3.0, range: 320, shape: 'field', cost: { hp: 0.01 },
+    blurb: '全场飞剑，每把独立结算。', fx: 'spr_fx_slashFan_0',
   },
-  'frost-thunder': {
-    id: 'frost-thunder',
-    name: '天霜雷狱',
-    needs: ['swift-lightning', 'frost-lock'],
-    element: 'ice',
-    damage: 28,
-    cooldown: 2.0,
-    blurb: '连锁闪电，冻结会传导。',
+  xuese: {
+    id: 'xuese', char: 'swordsman', name: '血色残阳',
+    needs: ['xueren', 'zhuifeng'], element: 'blood',
+    mult: 1.2, cooldown: 0.7, range: 24, shape: 'multi', cost: { hp: 0.004 },
+    blurb: '每段连击按损失气血加成。', fx: 'spr_fx_slashStraight_0',
   },
-  'green-lotus': {
-    id: 'green-lotus',
-    name: '青莲雷火',
-    needs: ['five-thunders', 'ten-thousand-binds'],
-    element: 'wood',
-    damage: 30,
-    cooldown: 2.8,
-    blurb: '雷击定身，持续灼烧。',
+  wuwo: {
+    id: 'wuwo', char: 'swordsman', name: '无我之境',
+    needs: ['chana', 'zhuifeng'], element: 'ice',
+    mult: 1.6, cooldown: 1.2, range: 40, shape: 'dash', cost: { hp: 0.006 },
+    blurb: '闪到背后立刻三段，背后必暴击。', fx: 'spr_fx_afterimage_0',
   },
-  'immovable-thunder': {
-    id: 'immovable-thunder',
-    name: '不动雷音',
-    needs: ['five-thunders', 'immovable'],
-    element: 'metal',
-    damage: 35,
-    cooldown: 4.0,
-    blurb: '受击时自动反击雷。',
+
+  // 道人
+  'jiuxiao-lei': {
+    id: 'jiuxiao-lei', char: 'daoist', name: '九霄天雷',
+    needs: ['wulei', 'guanri'], element: 'thunder',
+    mult: 5.0, cooldown: 4.0, range: 140, shape: 'field', cost: { mana: 40 },
+    blurb: '一线贯穿，沿途落雷。', fx: 'spr_fx_nineHeavens4_0',
   },
-  'fire-ice-prison': {
-    id: 'fire-ice-prison',
-    name: '焚天冰狱',
-    needs: ['burn-mountain', 'frost-lock'],
-    element: 'fire',
-    damage: 26,
-    cooldown: 2.5,
-    blurb: '冰火双环，交替伤害。',
+  tianshuang: {
+    id: 'tianshuang', char: 'daoist', name: '天霜雷狱',
+    needs: ['jiuyou', 'suodi'], element: 'ice',
+    mult: 3.2, cooldown: 3.0, range: 70, shape: 'field', cost: { mana: 34 },
+    blurb: '雷落在你刚离开的位置，定身。', fx: 'spr_fx_lightning24_0',
   },
-  'withered-spring': {
-    id: 'withered-spring',
-    name: '枯木逢春',
-    needs: ['undying-flame', 'spring-vine'],
-    element: 'wood',
-    damage: 0,
-    cooldown: 3.0,
-    blurb: '灼烧转化为治疗。',
+  fenglei: {
+    id: 'fenglei', char: 'daoist', name: '风雷引',
+    needs: ['yufeng', 'lianzhu'], element: 'wind',
+    mult: 0.8, cooldown: 0.9, range: 110, shape: 'multi', cost: { mana: 16 },
+    blurb: '三发追踪，移动时加速。', fx: 'spr_fx_qiFinger_0',
   },
-  'wind-thunder': {
-    id: 'wind-thunder',
-    name: '风雷引',
-    needs: ['swift-lightning', 'whirlwind'],
-    element: 'wind',
-    damage: 20,
-    cooldown: 1.0,
-    blurb: '沿移动轨迹放雷。',
+
+  // 魔头
+  xuehai: {
+    id: 'xuehai', char: 'demon', name: '血海滔天',
+    needs: ['wandu', 'yingfen'], element: 'wood',
+    mult: 0.6, cooldown: 2.4, range: 46, shape: 'summon', cost: { hp: 0.006, demon: 20 },
+    blurb: '每个残影都在放毒。', fx: 'spr_fx_domain_0',
   },
-  'vajra-glare': {
-    id: 'vajra-glare',
-    name: '金刚怒目',
-    needs: ['vajra-break', 'burn-mountain'],
-    element: 'metal',
-    damage: 32,
-    cooldown: 3.0,
-    blurb: '受击反伤，且额外爆炸。',
+  busi: {
+    id: 'busi', char: 'demon', name: '不死魔身',
+    needs: ['xixue', 'wandu'], element: 'blood',
+    mult: 0.8, cooldown: 1.6, range: 34, shape: 'dot', cost: { hp: 0.004, demon: 12 },
+    blurb: '吸血时把伤害转成叠层。', fx: 'spr_fx_bloodCurse_0',
+  },
+  morana: {
+    id: 'morana', char: 'demon', name: '魔染',
+    needs: ['xuebao', 'moyu'], element: 'blood',
+    mult: 2.4, cooldown: 3.2, range: 56, shape: 'field', cost: { hp: 0.008, demon: 22 },
+    blurb: '引爆时标记敌人，击杀后回血。', fx: 'spr_fx_domain_0',
   },
 };
 
-/** 升级到 5 级需要的碎片数。 */
-export const SHARDS_PER_LEVEL = 1;
-export const MAX_BASE_LEVEL = 5;
-export const MAX_FUSION_LEVEL = 3;
+/** 每个角色的三个初始技能。开局三选二。 */
+export const STARTERS: Record<CharKey, [SpellId, SpellId, SpellId]> = {
+  swordsman: ['qingfeng', 'huifeng', 'shouyuan'],
+  daoist: ['qizhi', 'yinlei', 'qingshen'],
+  demon: ['xuezhou', 'shihun', 'moying'],
+};
 
-/** 等级倍率：1.2 的幂。见 docs/systems.md。 */
-export function levelMultiplier(level: number): number {
-  return Math.pow(1.2, Math.max(0, level - 1));
-}
+export const CHAR_NAMES: Record<CharKey, string> = {
+  swordsman: '剑客 · 陆青锋',
+  daoist: '道人 · 无尘',
+  demon: '魔头 · 血衣',
+};
 
-/** 融合法术的等级倍率：1.3 的幂。 */
-export function fusionMultiplier(level: number): number {
-  return Math.pow(1.3, Math.max(0, level - 1));
-}
+export const CHAR_VERBS: Record<CharKey, string> = {
+  swordsman: '守',
+  daoist: '行',
+  demon: '杀',
+};
 
-/** 冷却缩减：用除法，永远不会到 0。 */
-export function cooldownOf(base: number, reduction: number): number {
-  return base / (1 + Math.max(0, reduction));
+/** 关外等级解锁到哪一层。见 resources.md。 */
+export function unlockTier(outerLevel: number): { branches: number; fusions: number } {
+  if (outerLevel >= 25) return { branches: 2, fusions: 3 };
+  if (outerLevel >= 20) return { branches: 2, fusions: 2 };
+  if (outerLevel >= 15) return { branches: 2, fusions: 1 };
+  if (outerLevel >= 10) return { branches: 2, fusions: 0 };
+  if (outerLevel >= 5) return { branches: 1, fusions: 0 };
+  return { branches: 0, fusions: 0 };
 }
 
 /**
- * 找出可用的融合：两个前置都已在手。
+ * 找出可用的融合：两个前置都已在手，且来自不同基础技能。
  *
- * 返回所有满足条件的融合，让玩家选。不自动融合——牺牲两个法术是
- * 重要决定，必须由玩家做。
+ * 返回的是"玩家已选分支"能凑出的所有组合。不自动融合——
+ * 牺牲两个技能换一个是重决定，必须由玩家做。
  */
-export function availableFusions(owned: readonly BranchId[]): FusionDef[] {
-  const result: FusionDef[] = [];
-  for (const fusion of Object.values(FUSIONS)) {
-    if (owned.includes(fusion.needs[0]) && owned.includes(fusion.needs[1])) {
-      result.push(fusion);
-    }
+export function availableFusions(owned: readonly BranchId[], char: CharKey): FusionDef[] {
+  const out: FusionDef[] = [];
+  for (const f of Object.values(FUSIONS)) {
+    if (f.char !== char) continue;
+    if (!owned.includes(f.needs[0]) || !owned.includes(f.needs[1])) continue;
+    // 数据兜底：同一基础的两条分支永远不该同时出现。
+    if (BRANCHES[f.needs[0]].from === BRANCHES[f.needs[1]].from) continue;
+    out.push(f);
   }
-  return result;
+  return out;
 }
 
-/** 某个基础法术的两条分支里，玩家选了哪条。没选返回 null。 */
-export function branchOf(spell: SpellId, owned: readonly BranchId[]): BranchId | null {
-  for (const branch of SPELLS[spell].branches) {
-    if (owned.includes(branch)) return branch;
-  }
-  return null;
+/** 道行累积器：吃满 SHARD_PER_LEVEL 升 1 级。 */
+export function levelFromShards(shards: number, max: number): number {
+  return Math.min(max, 1 + Math.floor(shards / 3));
 }

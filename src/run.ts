@@ -1,83 +1,79 @@
 /**
- * 一次修行的状态机。
+ * 一局修行的状态机。
  *
- * 为什么需要它：最常见的 bug 是"状态乱了"——死了还能出手、
- * 结算时还在刷怪、暂停时倒计时还在跑。用显式状态机挡掉这类问题。
+ * 为什么需要它：最常见的 bug 是"状态乱了" —— 死了还能出手、结算时还在刷怪、
+ * 选卡时倒计时还在跑。用显式状态机 + 单一 tick 入口挡掉这类问题。
  *
- * 六个状态：
- * - level：正在打某一层
- * - levelClear：过关，等玩家确认
- * - choosing：三选一（升级、分支、融合）
- * - dead：气血归零
- * - won：打完第九层
- * - menu：开局前的法术三选二
+ * 状态：
+ *   select      选人
+ *   meta        关外（看等级、分修为点）
+ *   starter     开局三选二
+ *   cutscene    过场（一屏文字）
+ *   playing     正在打这一关
+ *   choosing    三选一 / 分支二选一 / 融合
+ *   choice      剧情分岔（剑客第 5 关接受/拒绝心魔）
+ *   grant       剧情节点给东西
+ *   dead        气血归零
+ *   cleared     过了一关
+ *   won         走完九关
  */
-export type Phase = 'menu' | 'level' | 'levelClear' | 'choosing' | 'dead' | 'won';
+
+export type Phase =
+  | 'select'
+  | 'meta'
+  | 'starter'
+  | 'cutscene'
+  | 'playing'
+  | 'choosing'
+  | 'story-choice'
+  | 'grant'
+  | 'dead'
+  | 'cleared'
+  | 'won';
+
+/** 只有这几种状态下，世界还在推进。 */
+const ACTIVE: Phase[] = ['playing'];
 
 export class Run {
-  phase: Phase = 'menu';
-  /** 当前层，1 起算。 */
+  phase: Phase = 'select';
+  /** 当前关卡，1 起。 */
   level = 1;
-  /** 本层已过时间，秒。 */
+  /** 本关已过时间。 */
   elapsed = 0;
-  /** 本次修行总共击杀。 */
+  /** 本关击杀数（SWARM 的数目目标用）。 */
   kills = 0;
+  /** 本关开始时的关外等级快照（避免一局中途升级改变参考一击）。 */
+  outerLevelAtStart = 1;
 
-  /** 进入某一层。 */
-  enterLevel(level: number): void {
+  get isActive(): boolean {
+    return ACTIVE.includes(this.phase);
+  }
+
+  enter(level: number, outerLevel: number): void {
     this.level = level;
     this.elapsed = 0;
-    this.phase = 'level';
+    this.kills = 0;
+    this.outerLevelAtStart = outerLevel;
+    this.phase = 'playing';
   }
 
-  /** 每帧推进。返回本帧是否过关。 */
-  tick(dt: number, duration: number): boolean {
-    if (this.phase !== 'level') return false;
-
+  /** 每帧推进时间。返回是否到点（形状自己决定到点算不算过）。 */
+  tick(dt: number): void {
+    if (this.phase !== 'playing') return;
     this.elapsed += dt;
-    if (this.elapsed >= duration) {
-      this.phase = 'levelClear';
-      return true;
-    }
-    return false;
   }
 
-  get remaining(): number {
-    return 0;
+  to(p: Phase): void {
+    this.phase = p;
   }
 
-  /** 本层剩余秒数（需要外部传时长，因为每层不同）。 */
-  timeLeft(duration: number): number {
-    return Math.max(0, Math.ceil(duration - this.elapsed));
-  }
-
-  /** 打开三选一。 */
-  openChoice(): void {
-    this.phase = 'choosing';
-  }
-
-  /** 选完继续。 */
-  closeChoice(): void {
-    this.phase = this.level > 0 ? 'level' : 'menu';
-  }
-
-  /** 玩家阵亡。 */
-  die(): void {
-    if (this.phase === 'won') return;
-    this.phase = 'dead';
-  }
-
-  /** 通关。 */
-  win(): void {
-    this.phase = 'won';
-  }
-
-  get isPlaying(): boolean {
-    return this.phase === 'level';
+  /** 这一局是否还在"没打完"的状态（用来决定能否重开）。 */
+  get finished(): boolean {
+    return this.phase === 'dead' || this.phase === 'won';
   }
 
   reset(): void {
-    this.phase = 'menu';
+    this.phase = 'select';
     this.level = 1;
     this.elapsed = 0;
     this.kills = 0;
