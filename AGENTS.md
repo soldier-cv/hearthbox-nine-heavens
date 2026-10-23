@@ -2,6 +2,15 @@
 
 像素修仙 Roguelike：三个修士，一座被灭门的山，九关往上走。
 
+## 远端
+
+`git@github.com:soldier-cv/hearthbox-nine-heavens.git`（SSH）
+
+**用 SSH，不要用 HTTPS。** 这台机器上没有 HTTPS 凭据，`git push` 会卡在
+`could not read Username` 或者干脆挂住等一个永远不会出现的密码框。
+SSH 密钥（`~/.ssh/git_hub`）已经配好，`ssh -T git@github.com` 能认出 `soldier-cv`。
+推之前先 `git fetch` 看一眼远端有没有新提交，别用强推。
+
 ## 开工前必须加载的技能
 
 **这一节不要删。** 本项目是设计密集型，漏掉方法论会直接做歪：
