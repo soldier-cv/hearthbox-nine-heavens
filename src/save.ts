@@ -15,7 +15,7 @@ import { CHAR_ORDER } from './characters';
 import type { Apt } from './balance';
 import { MAX_OUTER_LEVEL, NEUTRAL_APT, levelFromXiu } from './balance';
 
-const SAVE_VERSION = 2;
+const SAVE_VERSION = 3;
 
 /** 关外进度。 */
 export interface CharSave {
@@ -24,16 +24,6 @@ export interface CharSave {
   xiu: number;
   /** 开局掷的天资。null = 新角色，还没掷。 */
   apt: Apt | null;
-  /** 加点分配。 */
-  points: {
-    hp: number;
-    resource: number;
-    speed: number;
-    damage: number;
-    cooldown: number;
-    crit: number;
-    killHeal: number;
-  };
   /** 每一关是否首通。索引 0 = 第 1 关。 */
   cleared: boolean[];
   /** 已通关卡的最高一关（决定解锁）。 */
@@ -64,7 +54,6 @@ export function emptyCharSave(): CharSave {
     v: SAVE_VERSION,
     xiu: 0,
     apt: null,
-    points: { hp: 0, resource: 0, speed: 0, damage: 0, cooldown: 0, crit: 0, killHeal: 0 },
     cleared: [false, false, false, false, false, false, false, false, false],
     bloodDebt: [],
     demonAccepted: null,
@@ -94,11 +83,10 @@ export class Saves {
     // 只认当前版本和上一版；更老的直接清掉。
     if (obj.v !== SAVE_VERSION && obj.v !== SAVE_VERSION - 1) return base;
     const out = { ...base, ...obj, v: SAVE_VERSION } as T;
-    // v1 -> v2：老档没有天资。给中性天资，不让老玩家被迫重掷。
-    if (obj.v === 1) {
-      const rec = out as unknown as CharSave;
-      if (!rec.apt) rec.apt = { ...NEUTRAL_APT };
-    }
+    // v1/v2 -> v3：老档没有天资。给中性天资，不让老玩家被迫重掷。
+    // v2 的加点字段在 v3 里已经废弃（关外改成按资质自动成长），合并时自然丢掉。
+    const rec = out as unknown as CharSave;
+    if (!rec.apt) rec.apt = { ...NEUTRAL_APT };
     return out;
   }
 
@@ -146,30 +134,4 @@ export function startLevelFor(s: CharSave): number {
 /** 关外等级 + 剩余修为。 */
 export function outerLevel(s: CharSave) {
   return levelFromXiu(s.xiu);
-}
-
-/** 已用点数。 */
-export function spentPoints(s: CharSave): number {
-  let n = 0;
-  for (const v of Object.values(s.points)) n += v;
-  return n;
-}
-
-/** 可分配点数 = 等级差 × 3。 */
-export function availablePoints(s: CharSave): number {
-  const { level } = outerLevel(s);
-  const total = (level - 1) * 3;
-  return Math.max(0, total - spentPoints(s));
-}
-
-/** 加点上限校验用。 */
-export function capFor(key: keyof CharSave['points']): number {
-  switch (key) {
-    case 'speed': return 30;
-    case 'damage': return 15;
-    case 'cooldown': return 15;
-    case 'crit': return 20;
-    case 'killHeal': return 30;
-    default: return MAX_OUTER_LEVEL * 3;
-  }
 }

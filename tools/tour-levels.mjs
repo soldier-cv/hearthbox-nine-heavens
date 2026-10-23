@@ -41,25 +41,14 @@ await page.waitForSelector('canvas', { timeout: 15000 });
 await page.click('body');
 await page.waitForTimeout(500);
 
-// 不死 + 伤害拉满：巡检只看"跑不跑得起来"，不是平衡。
-// 面板按钮被 Playwright 判为不可见，改用 JS 直接点。
+// 巡检只看"跑不跑得起来"，不是平衡：关掉玩家受伤。
+// 面板按钮在无头环境里拿不到可见性，用调试钩子更直接。
 const buffed = await page.evaluate(() => {
-  document.querySelector('#cheat-btn')?.click();
-  const toggle = document.querySelector('.cheat-toggle input[type=checkbox]');
-  if (toggle && !toggle.checked) toggle.click();
-  const sliders = [...document.querySelectorAll('.cheat-slider')];
-  const damage = sliders[1];
-  if (damage) {
-    damage.value = damage.max;
-    damage.dispatchEvent(new Event('input', { bubbles: true }));
-    damage.dispatchEvent(new Event('change', { bubbles: true }));
-  }
-  const close = document.querySelector('.cheat-close');
-  close?.click();
-  return { immortal: toggle?.checked ?? false, damage: damage?.value ?? null };
+  window.__nineHeavensInvincible?.(true);
+  return typeof window.__nineHeavensInvincible === 'function';
 });
-console.log('金手指', JSON.stringify(buffed));
-await page.waitForTimeout(300);
+console.log('不死钩子', buffed);
+await page.waitForTimeout(200);
 
 const rows = [];
 

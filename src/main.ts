@@ -34,12 +34,12 @@ import { daoToNext, makeOffers, starterChoices } from './offers';
 import type { Derived, PlayerState, Slot } from './player';
 import { deriveFromSave, makePlayer, outerLevelOf, refill, slotCap, tickPlayer } from './player';
 import type { View } from './render';
-import { STAT_KEYS, render } from './render';
+import { render } from './render';
 import { Run } from './run';
 import type { LevelPlan } from './routes';
 import { planFor, validateRoutes } from './routes';
 import type { CharSave } from './save';
-import { Saves, availablePoints, capFor, clearedByCharFrom, emptyCharSave, outerLevel, startLevelFor } from './save';
+import { Saves, clearedByCharFrom, emptyCharSave, outerLevel, startLevelFor } from './save';
 import type { ShapeState } from './shapes';
 import { SHAPES, makeState } from './shapes';
 import type { CharKey, SpellId } from './skills';
@@ -410,7 +410,7 @@ export default defineGame({
         const c = combat();
 
         movePlayer(dt);
-        tickPlayer(player, CHARACTERS[char], tune, dt, saves.char(char).points.resource, derived.resourceMul);
+        tickPlayer(player, CHARACTERS[char], tune, dt, derived.resourceMul);
 
         if (player.dodgeCd <= 0 && pressedDodge()) dodge();
         if (!attackConsumed && pressedAttack()) {
@@ -568,21 +568,7 @@ export default defineGame({
 
       if (run.phase === 'meta') {
         if (menuAttack()) beginRun(metaChar);
-        // 有点数时 K 进加点页；没点数按了也没反应。
-        if (pressedConfirm() && availablePoints(saves.char(metaChar)) > 0) {
-          metaCursor = 0;
-          run.to('points');
-        }
         if (pressedBack()) { cursor = CHAR_ORDER.indexOf(metaChar); run.to('select'); }
-        return;
-      }
-
-      if (run.phase === 'points') {
-        if (pressedUp()) metaCursor = (metaCursor + STAT_KEYS.length - 1) % STAT_KEYS.length;
-        if (pressedDown()) metaCursor = (metaCursor + 1) % STAT_KEYS.length;
-        if (pressedLeft()) adjustPoint(-1);
-        if (pressedRight()) adjustPoint(1);
-        if (pressedBack() || menuAttack()) run.to('meta');
         return;
       }
 
@@ -636,20 +622,6 @@ export default defineGame({
           audio.stopDrone();
         }
       }
-    }
-
-    /** 关外加点。点数不够或到上限就不动。 */
-    function adjustPoint(dir: number): void {
-      const save = saves.char(metaChar);
-      const key = STAT_KEYS[metaCursor]!;
-      if (dir > 0) {
-        if (availablePoints(save) <= 0) return;
-        if (save.points[key] >= capFor(key)) return;
-        save.points[key] += 1;
-      } else if (save.points[key] > 0) {
-        save.points[key] -= 1;
-      }
-      saves.writeChar(metaChar, save);
     }
 
     function view(): View {
@@ -723,7 +695,6 @@ export default defineGame({
         debugBegin,
         outerLevel: outerLevelOf(save),
         cleared: save.cleared.slice(),
-        points: { ...save.points },
         summary,
       };
     }

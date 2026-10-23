@@ -156,8 +156,6 @@ export function levelFromXiu(total: number): { level: number; into: number; need
 
 // ---------------------------------------------------------------- 关外加点
 
-export const POINTS_PER_LEVEL = 3;
-
 // ---------------------------------------------------------------- 开局天资
 
 /**
@@ -169,14 +167,17 @@ export const POINTS_PER_LEVEL = 3;
 export type AptKey = 'body' | 'spirit' | 'agility' | 'power';
 export const APT_ORDER: readonly AptKey[] = ['body', 'spirit', 'agility', 'power'];
 export const APT_TOTAL = 1000;
-export const APT_MIN = 150;
-export const APT_MAX = 350;
+export const APT_MIN = 200;
+export const APT_MAX = 300;
 /** 基准线：四项都是 250 时，正好等于一级的现有数值。 */
 export const APT_AVG = APT_TOTAL / APT_ORDER.length;
 /** 掷骰机会。第一次自动，之后可重掷 ROLL_CHANCES - 1 次。 */
 export const ROLL_CHANCES = 3;
-/** 体魄 → 气血。250 × 80 = 20,000。 */
-export const HP_PER_BODY = 80;
+/** 1 级气血的底数：12,000 + 体魄 × 32（体魄 250 → 20,000）。 */
+export const HP_FLOOR = 12000;
+export const HP_PER_BODY = 32;
+/** 每级气血成长（相对一级，再乘资质倍率）。 */
+export const HP_GROWTH = 0.04;
 
 export interface Apt {
   body: number;
@@ -246,7 +247,7 @@ export function aptRatio(v: number): number {
 }
 
 /**
- * 天资换算成一级的基础值。
+ * 资质换算成一级的基础值。
  * 气血用乘法（唯一看绝对数值的属性），其余用偏移量（它们本来就是百分比）。
  */
 export function aptBase(apt: Apt) {
@@ -257,33 +258,71 @@ export function aptBase(apt: Apt) {
     power: aptRatio(apt.power),
   };
   return {
-    maxHp: Math.round(apt.body * HP_PER_BODY),
+    maxHp: Math.round(HP_FLOOR + apt.body * HP_PER_BODY),
     resourceMul: r.spirit,
-    cooldownCut: (r.spirit - 1) * 0.15,
-    speedBonus: (r.agility - 1) * 0.15,
-    damageBonus: (r.power - 1) * 0.2,
-    critDelta: (r.power - 1) * 0.1,
-    killHealDelta: (r.body - 1) * 0.01,
+    cooldownCut: 0,
+    speedBonus: 0,
+    damageBonus: 0,
+    critDelta: 0,
+    killHealDelta: 0,
   };
 }
 
-export type StatKey = 'hp' | 'resource' | 'speed' | 'damage' | 'cooldown' | 'crit' | 'killHeal';
+// ---------------------------------------------------------------- 关外成长
 
-/** 每点效果与上限。上限存在是为了防止某一项堆到破坏平衡。 */
-export const STATS: Record<StatKey, { per: number; cap: number; unit: string; name: string }> = {
-  hp: { per: 1200, cap: Infinity, unit: '', name: '气血' },
-  resource: { per: 8, cap: Infinity, unit: '', name: '灵力上限' },
-  speed: { per: 0.01, cap: 0.3, unit: '%', name: '移速' },
-  damage: { per: 0.03, cap: 0.45, unit: '%', name: '伤害' },
-  cooldown: { per: 0.02, cap: 0.3, unit: '%', name: '冷却缩减' },
-  crit: { per: 0.02, cap: 0.4, unit: '%', name: '暴击率' },
-  killHeal: { per: 0.005, cap: 0.15, unit: '%', name: '击杀回血' },
-};
+/**
+ * 资质 = 成长率。
+ *
+ * **关键约定：四项都是 250 时，30 级正好回到原来的曲线。**
+ * 敌人数值是按"推荐等级的玩家"算的（参考一击、气血 ÷ 档位），
+ * 只要平均线不动，敌人表一张都不用重算 —— 变的是玩家之间的差异。
+ *
+ * 每级涨多少乘一个「资质 ÷ 300」：
+ * 300 的人在 30 级打满上限，250 的人到 83%，200 的人到 67%。
+ * 用 300 而不是 250 做分母，是为了让高资质真的能"早满"，
+ * 否则所有人都卡在同一个上限，掷骰就白掷了。
+ */
+const GROWTH = {
+  damage: 0.45,
+  crit: 0.32,
+  speed: 0.3,
+  cooldown: 0.3,
+  killHeal: 0.15,
+} as const;
 
-/** 加点后的实际值。 */
-export function statValue(key: StatKey, points: number): number {
-  const s = STATS[key];
-  return Math.min(s.per * points, s.cap === Infinity ? s.per * points : s.cap);
+/** 成长率的分母：资质到 300 时，30 级刚好打满上限。 */
+const GROWTH_FULL = 300;
+
+export interface OuterStats {
+  level: number;
+  maxHp: number;
+  resourceMul: number;
+  damageBonus: number;
+  crit: number;
+  speedBonus: number;
+  cooldownCut: number;
+  killHeal: number;
+}
+
+/** 关外某一级的全部属性。资质决定起点，也决定涨得多快。 */
+export function outerStats(apt: Apt, level: number): OuterStats {
+  const g = Math.max(0, level - 1);
+  const span = g / (MAX_OUTER_LEVEL - 1);
+  const rate = (v: number) => v / GROWTH_FULL;
+  const grow = (cap: number, v: number) => Math.min(cap, cap * span * rate(v));
+
+  const hpBase = HP_FLOOR + apt.body * HP_PER_BODY;
+  return {
+    level,
+    // 气血：底子按体魄，成长速度也按体魄。底数兜着，差距不会被复利放大成几倍。
+    maxHp: Math.round((hpBase * (1 + HP_GROWTH * g * aptRatio(apt.body))) / 100) * 100,
+    resourceMul: aptRatio(apt.spirit),
+    damageBonus: grow(GROWTH.damage, apt.power),
+    crit: 0.08 + grow(GROWTH.crit, apt.power),
+    speedBonus: grow(GROWTH.speed, apt.agility),
+    cooldownCut: grow(GROWTH.cooldown, apt.spirit),
+    killHeal: 0.003 + grow(GROWTH.killHeal, apt.body),
+  };
 }
 
 // ---------------------------------------------------------------- 关内：道行

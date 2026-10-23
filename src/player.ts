@@ -17,11 +17,10 @@ import {
   MAX_SKILL_LEVEL,
   NEUTRAL_APT,
   SWORD_INTENT,
-  aptBase,
+  outerStats,
   cooldownOf,
   levelFromXiu,
   playerHit,
-  statValue,
 } from './balance';
 import type { CharDef } from './characters';
 import { resourceBracket, resourceSpeedBonus } from './characters';
@@ -120,23 +119,19 @@ export function outerLevelOf(save: CharSave): number {
   return levelFromXiu(save.xiu).level;
 }
 
-/** 从存档算出这一局的关外起点。 */
+/** 从存档算出这一局的关外起点。资质决定起点，也决定每级涨多快。 */
 export function deriveFromSave(save: CharSave): Derived {
   const level = outerLevelOf(save);
-  const p = save.points;
-  // 天资决定一级的底子；等级倍率只乘在底子上；加点最后加，不参与乘法。
-  // 三条线分开，改一条不会把另外两条带歪。
-  const base = aptBase(save.apt ?? NEUTRAL_APT);
-  const levelFactor = 1 + 0.04 * (level - 1);
+  const s = outerStats(save.apt ?? NEUTRAL_APT, level);
   return {
     level,
-    baseMaxHp: Math.round((base.maxHp * levelFactor) / 100) * 100 + statValue('hp', p.hp),
-    resourceMul: base.resourceMul,
-    cooldownCut: base.cooldownCut + statValue('cooldown', p.cooldown),
-    speedBonus: base.speedBonus + statValue('speed', p.speed),
-    crit: 0.08 + base.critDelta + statValue('crit', p.crit),
-    killHeal: 0.003 + base.killHealDelta + statValue('killHeal', p.killHeal),
-    damageBonus: base.damageBonus + statValue('damage', p.damage),
+    baseMaxHp: s.maxHp,
+    resourceMul: s.resourceMul,
+    cooldownCut: s.cooldownCut,
+    speedBonus: s.speedBonus,
+    crit: s.crit,
+    killHeal: s.killHeal,
+    damageBonus: s.damageBonus,
   };
 }
 
@@ -284,9 +279,9 @@ export function onDealtHit(p: PlayerState, def: CharDef): void {
   }
 }
 
-/** 灵力/魔气的加点上限扩展。灵机决定基础倍率，加点在其上再加。 */
-export function resourceMax(def: CharDef, extraPoints: number, resourceMul = 1): number {
-  if (def.key === 'daoist') return Math.round((MANA.max + statValue('resource', extraPoints)) * resourceMul);
+/** 灵力/魔气上限。灵机决定倍率。 */
+export function resourceMax(def: CharDef, resourceMul = 1): number {
+  if (def.key === 'daoist') return Math.round(MANA.max * resourceMul);
   return DEMONA.max;
 }
 
@@ -296,11 +291,10 @@ export function tickPlayer(
   def: CharDef,
   tune: Tuning,
   dt: number,
-  extraResource: number,
   resourceMul = 1,
 ): void {
-  // 上限每帧都重算：加点、灵机、临时增益都走这一条，别在多处各算一遍。
-  p.resMax = resourceMax(def, extraResource, resourceMul);
+  // 上限每帧都重算：灵机、临时增益都走这一条，别在多处各算一遍。
+  p.resMax = resourceMax(def, resourceMul);
 
   for (const slot of p.slots) {
     if (slot.cd > 0) slot.cd = Math.max(0, slot.cd - dt);

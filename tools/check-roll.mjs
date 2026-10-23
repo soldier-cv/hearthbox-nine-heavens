@@ -80,10 +80,10 @@ await page.waitForTimeout(500);
 s = await read();
 const apt = s?.apt;
 if (apt) {
-  const expect = Math.round((apt.body * 80) / 100) * 100;
+  const expect = Math.round((12000 + apt.body * 32) / 100) * 100;
   console.log('开局 maxHp', s?.maxHp, ' derived', s?.derivedBaseHp, ' 期望', expect, s?.maxHp === expect ? '✅' : '❌');
 }
-await shoot('00-meta-derived');
+
 
 console.log(errs.length ? `控制台错误：\n${errs.slice(0, 5).join('\n')}` : '控制台无错误');
 await browser.close();
